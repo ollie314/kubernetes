@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -50,10 +50,10 @@ func (kl *Kubelet) GetContainerInfoV2(name string, options cadvisorapiv2.Request
 	return kl.cadvisor.ContainerInfoV2(name, options)
 }
 
-// DockerImagesFsInfo returns information about docker image fs usage from
+// ImagesFsInfo returns information about docker image fs usage from
 // cadvisor.
-func (kl *Kubelet) DockerImagesFsInfo() (cadvisorapiv2.FsInfo, error) {
-	return kl.cadvisor.DockerImagesFsInfo()
+func (kl *Kubelet) ImagesFsInfo() (cadvisorapiv2.FsInfo, error) {
+	return kl.cadvisor.ImagesFsInfo()
 }
 
 // RootFsInfo returns info about the root fs from cadvisor.

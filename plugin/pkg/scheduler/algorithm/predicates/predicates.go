@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,12 +18,17 @@ package predicates
 
 import (
 	"fmt"
+	"math/rand"
+	"strconv"
+	"time"
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/cache"
+	"k8s.io/kubernetes/pkg/kubelet/qos"
 	"k8s.io/kubernetes/pkg/labels"
+	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/algorithm"
 	priorityutil "k8s.io/kubernetes/plugin/pkg/scheduler/algorithm/priorities/util"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
@@ -54,10 +59,29 @@ func (c *CachedNodeInfo) GetNodeInfo(id string) (*api.Node, error) {
 	}
 
 	if !exists {
-		return nil, fmt.Errorf("node '%v' is not in cache", id)
+		return nil, fmt.Errorf("node '%v' not found", id)
 	}
 
 	return node.(*api.Node), nil
+}
+
+// podMetadata is a type that is passed as metadata for predicate functions
+type predicateMetadata struct {
+	podBestEffort bool
+	podRequest    *resourceRequest
+	podPorts      map[int]bool
+}
+
+func PredicateMetadata(pod *api.Pod) interface{} {
+	if pod == nil {
+		// We cannot compute metadata, just return nil
+		return nil
+	}
+	return &predicateMetadata{
+		podBestEffort: isPodBestEffort(pod),
+		podRequest:    getResourceRequest(pod),
+		podPorts:      getUsedPorts(pod),
+	}
 }
 
 func isVolumeConflict(volume api.Volume, pod *api.Pod) bool {
@@ -101,7 +125,7 @@ func isVolumeConflict(volume api.Volume, pod *api.Pod) bool {
 // - AWS EBS forbids any two pods mounting the same volume ID
 // - Ceph RBD forbids if any two pods share at least same monitor, and match pool and image.
 // TODO: migrate this into some per-volume specific code?
-func NoDiskConflict(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+func NoDiskConflict(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
 	for _, v := range pod.Spec.Volumes {
 		for _, ev := range nodeInfo.Pods() {
 			if isVolumeConflict(v, ev) {
@@ -151,11 +175,21 @@ func (c *MaxPDVolumeCountChecker) filterVolumes(volumes []api.Volume, namespace 
 		} else if vol.PersistentVolumeClaim != nil {
 			pvcName := vol.PersistentVolumeClaim.ClaimName
 			if pvcName == "" {
-				return fmt.Errorf("PersistentVolumeClaim had no name: %q", pvcName)
+				return fmt.Errorf("PersistentVolumeClaim had no name")
 			}
 			pvc, err := c.pvcInfo.GetPersistentVolumeClaimInfo(namespace, pvcName)
 			if err != nil {
-				return err
+				// if the PVC is not found, log the error and count the PV towards the PV limit
+				// generate a random volume ID since its required for de-dup
+				utilruntime.HandleError(fmt.Errorf("Unable to look up PVC info for %s/%s, assuming PVC matches predicate when counting limits: %v", namespace, pvcName, err))
+				source := rand.NewSource(time.Now().UnixNano())
+				generatedID := "missingPVC" + strconv.Itoa(rand.New(source).Intn(1000000))
+				filteredVolumes[generatedID] = true
+				return nil
+			}
+
+			if pvc == nil {
+				return fmt.Errorf("PersistentVolumeClaim not found: %q", pvcName)
 			}
 
 			pvName := pvc.Spec.VolumeName
@@ -165,7 +199,18 @@ func (c *MaxPDVolumeCountChecker) filterVolumes(volumes []api.Volume, namespace 
 
 			pv, err := c.pvInfo.GetPersistentVolumeInfo(pvName)
 			if err != nil {
-				return err
+				// if the PV is not found, log the error
+				// and count the PV towards the PV limit
+				// generate a random volume ID since its required for de-dup
+				utilruntime.HandleError(fmt.Errorf("Unable to look up PV info for %s/%s/%s, assuming PV matches predicate when counting limits: %v", namespace, pvcName, pvName, err))
+				source := rand.NewSource(time.Now().UnixNano())
+				generatedID := "missingPV" + strconv.Itoa(rand.New(source).Intn(1000000))
+				filteredVolumes[generatedID] = true
+				return nil
+			}
+
+			if pv == nil {
+				return fmt.Errorf("PersistentVolume not found: %q", pvName)
 			}
 
 			if id, ok := c.filter.FilterPersistentVolume(pv); ok {
@@ -177,7 +222,13 @@ func (c *MaxPDVolumeCountChecker) filterVolumes(volumes []api.Volume, namespace 
 	return nil
 }
 
-func (c *MaxPDVolumeCountChecker) predicate(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+func (c *MaxPDVolumeCountChecker) predicate(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+	// If a pod doesn't have any volume attached to it, the predicate will always be true.
+	// Thus we make a fast path for it, to avoid unnecessary computations in this case.
+	if len(pod.Spec.Volumes) == 0 {
+		return true, nil
+	}
+
 	newVolumes := make(map[string]bool)
 	if err := c.filterVolumes(pod.Spec.Volumes, pod.Namespace, newVolumes); err != nil {
 		return false, err
@@ -275,7 +326,13 @@ func NewVolumeZonePredicate(pvInfo PersistentVolumeInfo, pvcInfo PersistentVolum
 	return c.predicate
 }
 
-func (c *VolumeZoneChecker) predicate(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+func (c *VolumeZoneChecker) predicate(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+	// If a pod doesn't have any volume attached to it, the predicate will always be true.
+	// Thus we make a fast path for it, to avoid unnecessary computations in this case.
+	if len(pod.Spec.Volumes) == 0 {
+		return true, nil
+	}
+
 	node := nodeInfo.Node()
 	if node == nil {
 		return false, fmt.Errorf("node not found")
@@ -304,7 +361,7 @@ func (c *VolumeZoneChecker) predicate(pod *api.Pod, nodeInfo *schedulercache.Nod
 		if volume.PersistentVolumeClaim != nil {
 			pvcName := volume.PersistentVolumeClaim.ClaimName
 			if pvcName == "" {
-				return false, fmt.Errorf("PersistentVolumeClaim had no name: %q", pvcName)
+				return false, fmt.Errorf("PersistentVolumeClaim had no name")
 			}
 			pvc, err := c.pvcInfo.GetPersistentVolumeClaimInfo(namespace, pvcName)
 			if err != nil {
@@ -351,7 +408,7 @@ type resourceRequest struct {
 	nvidiaGPU int64
 }
 
-func getResourceRequest(pod *api.Pod) resourceRequest {
+func getResourceRequest(pod *api.Pod) *resourceRequest {
 	result := resourceRequest{}
 	for _, container := range pod.Spec.Containers {
 		requests := container.Resources.Requests
@@ -369,83 +426,54 @@ func getResourceRequest(pod *api.Pod) resourceRequest {
 			result.milliCPU = cpu
 		}
 	}
-	return result
-}
-
-func CheckPodsExceedingFreeResources(pods []*api.Pod, allocatable api.ResourceList) (fitting []*api.Pod, notFittingCPU, notFittingMemory, notFittingNvidiaGPU []*api.Pod) {
-	totalMilliCPU := allocatable.Cpu().MilliValue()
-	totalMemory := allocatable.Memory().Value()
-	totalNvidiaGPU := allocatable.NvidiaGPU().Value()
-	milliCPURequested := int64(0)
-	memoryRequested := int64(0)
-	nvidiaGPURequested := int64(0)
-	for _, pod := range pods {
-		podRequest := getResourceRequest(pod)
-		fitsCPU := (totalMilliCPU - milliCPURequested) >= podRequest.milliCPU
-		fitsMemory := (totalMemory - memoryRequested) >= podRequest.memory
-		fitsNVidiaGPU := (totalNvidiaGPU - nvidiaGPURequested) >= podRequest.nvidiaGPU
-		if !fitsCPU {
-			// the pod doesn't fit due to CPU request
-			notFittingCPU = append(notFittingCPU, pod)
-			continue
-		}
-		if !fitsMemory {
-			// the pod doesn't fit due to Memory request
-			notFittingMemory = append(notFittingMemory, pod)
-			continue
-		}
-		if !fitsNVidiaGPU {
-			// the pod doesn't fit due to NvidiaGPU request
-			notFittingNvidiaGPU = append(notFittingNvidiaGPU, pod)
-			continue
-		}
-		// the pod fits
-		milliCPURequested += podRequest.milliCPU
-		memoryRequested += podRequest.memory
-		nvidiaGPURequested += podRequest.nvidiaGPU
-		fitting = append(fitting, pod)
-	}
-	return
+	return &result
 }
 
 func podName(pod *api.Pod) string {
 	return pod.Namespace + "/" + pod.Name
 }
 
-func PodFitsResources(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+func PodFitsResources(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
 	node := nodeInfo.Node()
 	if node == nil {
 		return false, fmt.Errorf("node not found")
 	}
-	allocatable := node.Status.Allocatable
-	allowedPodNumber := allocatable.Pods().Value()
-	if int64(len(nodeInfo.Pods()))+1 > allowedPodNumber {
+	allowedPodNumber := nodeInfo.AllowedPodNumber()
+	if len(nodeInfo.Pods())+1 > allowedPodNumber {
 		return false,
-			newInsufficientResourceError(podCountResourceName, 1, int64(len(nodeInfo.Pods())), allowedPodNumber)
+			newInsufficientResourceError(podCountResourceName, 1, int64(len(nodeInfo.Pods())), int64(allowedPodNumber))
 	}
-	podRequest := getResourceRequest(pod)
+
+	var podRequest *resourceRequest
+	if predicateMeta, ok := meta.(*predicateMetadata); ok {
+		podRequest = predicateMeta.podRequest
+	} else {
+		// We couldn't parse metadata - fallback to computing it.
+		podRequest = getResourceRequest(pod)
+	}
 	if podRequest.milliCPU == 0 && podRequest.memory == 0 && podRequest.nvidiaGPU == 0 {
 		return true, nil
 	}
 
-	totalMilliCPU := allocatable.Cpu().MilliValue()
-	totalMemory := allocatable.Memory().Value()
-	totalNvidiaGPU := allocatable.NvidiaGPU().Value()
-
-	if totalMilliCPU < podRequest.milliCPU+nodeInfo.RequestedResource().MilliCPU {
+	allocatable := nodeInfo.AllocatableResource()
+	if allocatable.MilliCPU < podRequest.milliCPU+nodeInfo.RequestedResource().MilliCPU {
 		return false,
-			newInsufficientResourceError(cpuResourceName, podRequest.milliCPU, nodeInfo.RequestedResource().MilliCPU, totalMilliCPU)
+			newInsufficientResourceError(cpuResourceName, podRequest.milliCPU, nodeInfo.RequestedResource().MilliCPU, allocatable.MilliCPU)
 	}
-	if totalMemory < podRequest.memory+nodeInfo.RequestedResource().Memory {
+	if allocatable.Memory < podRequest.memory+nodeInfo.RequestedResource().Memory {
 		return false,
-			newInsufficientResourceError(memoryResourceName, podRequest.memory, nodeInfo.RequestedResource().Memory, totalMemory)
+			newInsufficientResourceError(memoryResourceName, podRequest.memory, nodeInfo.RequestedResource().Memory, allocatable.Memory)
 	}
-	if totalNvidiaGPU < podRequest.nvidiaGPU+nodeInfo.RequestedResource().NvidiaGPU {
+	if allocatable.NvidiaGPU < podRequest.nvidiaGPU+nodeInfo.RequestedResource().NvidiaGPU {
 		return false,
-			newInsufficientResourceError(nvidiaGpuResourceName, podRequest.nvidiaGPU, nodeInfo.RequestedResource().NvidiaGPU, totalNvidiaGPU)
+			newInsufficientResourceError(nvidiaGpuResourceName, podRequest.nvidiaGPU, nodeInfo.RequestedResource().NvidiaGPU, allocatable.NvidiaGPU)
 	}
-	glog.V(10).Infof("Schedule Pod %+v on Node %+v is allowed, Node is running only %v out of %v Pods.",
-		podName(pod), node.Name, len(nodeInfo.Pods()), allowedPodNumber)
+	if glog.V(10) {
+		// We explicitly don't do glog.V(10).Infof() to avoid computing all the parameters if this is
+		// not logged. There is visible performance gain from it.
+		glog.Infof("Schedule Pod %+v on Node %+v is allowed, Node is running only %v out of %v Pods.",
+			podName(pod), node.Name, len(nodeInfo.Pods()), allowedPodNumber)
+	}
 	return true, nil
 }
 
@@ -466,7 +494,7 @@ func nodeMatchesNodeSelectorTerms(node *api.Node, nodeSelectorTerms []api.NodeSe
 }
 
 // The pod can only schedule onto nodes that satisfy requirements in both NodeAffinity and nodeSelector.
-func PodMatchesNodeLabels(pod *api.Pod, node *api.Node) bool {
+func podMatchesNodeLabels(pod *api.Pod, node *api.Node) bool {
 	// Check if node.Labels match pod.Spec.NodeSelector.
 	if len(pod.Spec.NodeSelector) > 0 {
 		selector := labels.SelectorFromSet(pod.Spec.NodeSelector)
@@ -518,18 +546,18 @@ func PodMatchesNodeLabels(pod *api.Pod, node *api.Node) bool {
 	return nodeAffinityMatches
 }
 
-func PodSelectorMatches(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+func PodSelectorMatches(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
 	node := nodeInfo.Node()
 	if node == nil {
 		return false, fmt.Errorf("node not found")
 	}
-	if PodMatchesNodeLabels(pod, node) {
+	if podMatchesNodeLabels(pod, node) {
 		return true, nil
 	}
 	return false, ErrNodeSelectorNotMatch
 }
 
-func PodFitsHost(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+func PodFitsHost(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
 	if len(pod.Spec.NodeName) == 0 {
 		return true, nil
 	}
@@ -568,7 +596,7 @@ func NewNodeLabelPredicate(labels []string, presence bool) algorithm.FitPredicat
 // Alternately, eliminating nodes that have a certain label, regardless of value, is also useful
 // A node may have a label with "retiring" as key and the date as the value
 // and it may be desirable to avoid scheduling new pods on this node
-func (n *NodeLabelChecker) CheckNodeLabelPresence(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+func (n *NodeLabelChecker) CheckNodeLabelPresence(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
 	node := nodeInfo.Node()
 	if node == nil {
 		return false, fmt.Errorf("node not found")
@@ -611,7 +639,12 @@ func NewServiceAffinityPredicate(podLister algorithm.PodLister, serviceLister al
 // - L is listed in the ServiceAffinity object that is passed into the function
 // - the pod does not have any NodeSelector for L
 // - some other pod from the same service is already scheduled onto a node that has value V for label L
-func (s *ServiceAffinity) CheckServiceAffinity(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+func (s *ServiceAffinity) CheckServiceAffinity(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+	node := nodeInfo.Node()
+	if node == nil {
+		return false, fmt.Errorf("node not found")
+	}
+
 	var affinitySelector labels.Selector
 
 	// check if the pod being scheduled has the affinity labels specified in its NodeSelector
@@ -671,11 +704,6 @@ func (s *ServiceAffinity) CheckServiceAffinity(pod *api.Pod, nodeInfo *scheduler
 		affinitySelector = labels.Set(affinityLabels).AsSelector()
 	}
 
-	node := nodeInfo.Node()
-	if node == nil {
-		return false, fmt.Errorf("node not found")
-	}
-
 	// check if the node matches the selector
 	if affinitySelector.Matches(labels.Set(node.Labels)) {
 		return true, nil
@@ -683,17 +711,22 @@ func (s *ServiceAffinity) CheckServiceAffinity(pod *api.Pod, nodeInfo *scheduler
 	return false, ErrServiceAffinityViolated
 }
 
-func PodFitsHostPorts(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
-	wantPorts := getUsedPorts(pod)
+func PodFitsHostPorts(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+	var wantPorts map[int]bool
+	if predicateMeta, ok := meta.(*predicateMetadata); ok {
+		wantPorts = predicateMeta.podPorts
+	} else {
+		// We couldn't parse metadata - fallback to computing it.
+		wantPorts = getUsedPorts(pod)
+	}
 	if len(wantPorts) == 0 {
 		return true, nil
 	}
+
+	// TODO: Aggregate it at the NodeInfo level.
 	existingPorts := getUsedPorts(nodeInfo.Pods()...)
 	for wport := range wantPorts {
-		if wport == 0 {
-			continue
-		}
-		if existingPorts[wport] {
+		if wport != 0 && existingPorts[wport] {
 			return false, ErrPodNotFitsHostPorts
 		}
 	}
@@ -701,11 +734,12 @@ func PodFitsHostPorts(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, er
 }
 
 func getUsedPorts(pods ...*api.Pod) map[int]bool {
-	// TODO: Aggregate it at the NodeInfo level.
 	ports := make(map[int]bool)
 	for _, pod := range pods {
-		for _, container := range pod.Spec.Containers {
-			for _, podPort := range container.Ports {
+		for j := range pod.Spec.Containers {
+			container := &pod.Spec.Containers[j]
+			for k := range container.Ports {
+				podPort := &container.Ports[k]
 				// "0" is explicitly ignored in PodFitsHostPorts,
 				// which is the only function that uses this value.
 				if podPort.HostPort != 0 {
@@ -729,21 +763,21 @@ func haveSame(a1, a2 []string) bool {
 	return false
 }
 
-func GeneralPredicates(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
-	fit, err := PodFitsResources(pod, nodeInfo)
+func GeneralPredicates(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+	fit, err := PodFitsResources(pod, meta, nodeInfo)
 	if !fit {
 		return fit, err
 	}
 
-	fit, err = PodFitsHost(pod, nodeInfo)
+	fit, err = PodFitsHost(pod, meta, nodeInfo)
 	if !fit {
 		return fit, err
 	}
-	fit, err = PodFitsHostPorts(pod, nodeInfo)
+	fit, err = PodFitsHostPorts(pod, meta, nodeInfo)
 	if !fit {
 		return fit, err
 	}
-	fit, err = PodSelectorMatches(pod, nodeInfo)
+	fit, err = PodSelectorMatches(pod, meta, nodeInfo)
 	if !fit {
 		return fit, err
 	}
@@ -765,7 +799,7 @@ func NewPodAffinityPredicate(info NodeInfo, podLister algorithm.PodLister, failu
 	return checker.InterPodAffinityMatches
 }
 
-func (checker *PodAffinityChecker) InterPodAffinityMatches(pod *api.Pod, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+func (checker *PodAffinityChecker) InterPodAffinityMatches(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
 	node := nodeInfo.Node()
 	if node == nil {
 		return false, fmt.Errorf("node not found")
@@ -783,10 +817,11 @@ func (checker *PodAffinityChecker) InterPodAffinityMatches(pod *api.Pod, nodeInf
 // AnyPodMatchesPodAffinityTerm checks if any of given pods can match the specific podAffinityTerm.
 func (checker *PodAffinityChecker) AnyPodMatchesPodAffinityTerm(pod *api.Pod, allPods []*api.Pod, node *api.Node, podAffinityTerm api.PodAffinityTerm) (bool, error) {
 	for _, ep := range allPods {
-		match, err := checker.failureDomains.CheckIfPodMatchPodAffinityTerm(ep, pod, podAffinityTerm,
-			func(ep *api.Pod) (*api.Node, error) { return checker.info.GetNodeInfo(ep.Spec.NodeName) },
-			func(pod *api.Pod) (*api.Node, error) { return node, nil },
-		)
+		epNode, err := checker.info.GetNodeInfo(ep.Spec.NodeName)
+		if err != nil {
+			return false, err
+		}
+		match, err := checker.failureDomains.CheckIfPodMatchPodAffinityTerm(ep, epNode, node, pod, podAffinityTerm)
 		if err != nil || match {
 			return match, err
 		}
@@ -856,7 +891,7 @@ func (checker *PodAffinityChecker) NodeMatchesHardPodAffinity(pod *api.Pod, allP
 // break any existing pods' anti-affinity rules, then return true.
 func (checker *PodAffinityChecker) NodeMatchesHardPodAntiAffinity(pod *api.Pod, allPods []*api.Pod, node *api.Node, podAntiAffinity *api.PodAntiAffinity) bool {
 	var podAntiAffinityTerms []api.PodAffinityTerm
-	if len(podAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 0 {
+	if podAntiAffinity != nil && len(podAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution) != 0 {
 		podAntiAffinityTerms = podAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
 	}
 	// TODO: Uncomment this block when implement RequiredDuringSchedulingRequiredDuringExecution.
@@ -930,17 +965,99 @@ func (checker *PodAffinityChecker) NodeMatchPodAffinityAntiAffinity(pod *api.Pod
 	}
 
 	// check if the current node match the inter-pod affinity scheduling rules.
+	// hard inter-pod affinity is not symmetric, check only when affinity.PodAffinity is not nil.
 	if affinity.PodAffinity != nil {
 		if !checker.NodeMatchesHardPodAffinity(pod, allPods, node, affinity.PodAffinity) {
 			return false
 		}
 	}
 
-	// check if the current node match the inter-pod anti-affinity scheduling rules.
-	if affinity.PodAntiAffinity != nil {
-		if !checker.NodeMatchesHardPodAntiAffinity(pod, allPods, node, affinity.PodAntiAffinity) {
+	// hard inter-pod anti-affinity is symmetric, check both when affinity.PodAntiAffinity is nil and not nil.
+	return checker.NodeMatchesHardPodAntiAffinity(pod, allPods, node, affinity.PodAntiAffinity)
+}
+
+func PodToleratesNodeTaints(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+	node := nodeInfo.Node()
+	if node == nil {
+		return false, fmt.Errorf("node not found")
+	}
+
+	taints, err := api.GetTaintsFromNodeAnnotations(node.Annotations)
+	if err != nil {
+		return false, err
+	}
+
+	tolerations, err := api.GetTolerationsFromPodAnnotations(pod.Annotations)
+	if err != nil {
+		return false, err
+	}
+
+	if tolerationsToleratesTaints(tolerations, taints) {
+		return true, nil
+	}
+	return false, ErrTaintsTolerationsNotMatch
+}
+
+func tolerationsToleratesTaints(tolerations []api.Toleration, taints []api.Taint) bool {
+	// If the taint list is nil/empty, it is tolerated by all tolerations by default.
+	if len(taints) == 0 {
+		return true
+	}
+
+	// The taint list isn't nil/empty, a nil/empty toleration list can't tolerate them.
+	if len(tolerations) == 0 {
+		return false
+	}
+
+	for i := range taints {
+		taint := &taints[i]
+		// skip taints that have effect PreferNoSchedule, since it is for priorities
+		if taint.Effect == api.TaintEffectPreferNoSchedule {
+			continue
+		}
+
+		if !api.TaintToleratedByTolerations(taint, tolerations) {
 			return false
 		}
 	}
+
 	return true
+}
+
+// Determine if a pod is scheduled with best-effort QoS
+func isPodBestEffort(pod *api.Pod) bool {
+	return qos.GetPodQOS(pod) == qos.BestEffort
+}
+
+// CheckNodeMemoryPressurePredicate checks if a pod can be scheduled on a node
+// reporting memory pressure condition.
+func CheckNodeMemoryPressurePredicate(pod *api.Pod, meta interface{}, nodeInfo *schedulercache.NodeInfo) (bool, error) {
+	node := nodeInfo.Node()
+	if node == nil {
+		return false, fmt.Errorf("node not found")
+	}
+
+	var podBestEffort bool
+
+	predicateMeta, ok := meta.(*predicateMetadata)
+	if ok {
+		podBestEffort = predicateMeta.podBestEffort
+	} else {
+		// We couldn't parse metadata - fallback to computing it.
+		podBestEffort = isPodBestEffort(pod)
+	}
+
+	// pod is not BestEffort pod
+	if !podBestEffort {
+		return true, nil
+	}
+
+	// is node under presure?
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == api.NodeMemoryPressure && cond.Status == api.ConditionTrue {
+			return false, ErrNodeUnderMemoryPressure
+		}
+	}
+
+	return true, nil
 }

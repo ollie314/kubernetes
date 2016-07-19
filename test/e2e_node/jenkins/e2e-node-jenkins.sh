@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2016 The Kubernetes Authors All rights reserved.
+# Copyright 2016 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,13 +28,16 @@ set -x
 
 . $1
 
-if [ "$INSTALL_GODEP" = true ] ; then
-  go get -u github.com/tools/godep
-  go get -u github.com/onsi/ginkgo/ginkgo
-  go get -u github.com/onsi/gomega
-fi
-
+make generated_files
 go build test/e2e_node/environment/conformance.go
+
+WORKSPACE=${WORKSPACE:-"/tmp/"}
+ARTIFACTS=${WORKSPACE}/_artifacts
+
+mkdir -p ${ARTIFACTS}
 go run test/e2e_node/runner/run_e2e.go  --logtostderr --vmodule=*=2 --ssh-env="gce" \
-  --zone="$GCE_ZONE" --project="$GCE_PROJECT"  \
-  --hosts="$GCE_HOSTS" --images="$GCE_IMAGES" --cleanup="$CLEANUP"
+  --zone="$GCE_ZONE" --project="$GCE_PROJECT" --hosts="$GCE_HOSTS" \
+  --images="$GCE_IMAGES" --image-project="$GCE_IMAGE_PROJECT" \
+  --image-config-file="$GCE_IMAGE_CONFIG_PATH" --cleanup="$CLEANUP" \
+  --results-dir="$ARTIFACTS" --ginkgo-flags="$GINKGO_FLAGS" \
+  --setup-node="$SETUP_NODE" --test_args="$TEST_ARGS" --instance-metadata="$GCE_INSTANCE_METADATA"

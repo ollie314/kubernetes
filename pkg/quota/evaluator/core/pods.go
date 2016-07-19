@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/validation"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/kubelet/qos/util"
+	"k8s.io/kubernetes/pkg/kubelet/qos"
 	"k8s.io/kubernetes/pkg/quota"
 	"k8s.io/kubernetes/pkg/quota/generic"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -172,16 +172,7 @@ func PodMatchesScopeFunc(scope api.ResourceQuotaScope, object runtime.Object) bo
 }
 
 func isBestEffort(pod *api.Pod) bool {
-	// TODO: when we have request/limits on a pod scope, we need to revisit this
-	for _, container := range pod.Spec.Containers {
-		qosPerResource := util.GetQoS(&container)
-		for _, qos := range qosPerResource {
-			if util.BestEffort == qos {
-				return true
-			}
-		}
-	}
-	return false
+	return qos.GetPodQOS(pod) == qos.BestEffort
 }
 
 func isTerminating(pod *api.Pod) bool {

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,6 +21,8 @@ import (
 )
 
 // TokenReview attempts to authenticate a token to a known user.
+// Note: TokenReview requests may be cached by the webhook token authenticator
+// plugin in the kube-apiserver.
 type TokenReview struct {
 	unversioned.TypeMeta `json:",inline"`
 

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ import (
 )
 
 func TestValidateRoleBinding(t *testing.T) {
-	errs := ValidateRoleBinding(
+	errs := validateRoleBinding(
 		&rbac.RoleBinding{
 			ObjectMeta: api.ObjectMeta{Namespace: api.NamespaceDefault, Name: "master"},
 			RoleRef:    api.ObjectReference{Namespace: "master", Name: "valid"},
@@ -96,15 +96,6 @@ func TestValidateRoleBinding(t *testing.T) {
 			T: field.ErrorTypeInvalid,
 			F: "subjects[0].name",
 		},
-		"forbidden fields": {
-			A: rbac.RoleBinding{
-				ObjectMeta: api.ObjectMeta{Namespace: api.NamespaceDefault, Name: "master"},
-				RoleRef:    api.ObjectReference{Namespace: "master", Name: "valid"},
-				Subjects:   []rbac.Subject{{Name: "subject", Kind: rbac.ServiceAccountKind, APIVersion: "foo"}},
-			},
-			T: field.ErrorTypeForbidden,
-			F: "subjects[0].apiVersion",
-		},
 		"missing subject name": {
 			A: rbac.RoleBinding{
 				ObjectMeta: api.ObjectMeta{Namespace: api.NamespaceDefault, Name: "master"},
@@ -116,7 +107,7 @@ func TestValidateRoleBinding(t *testing.T) {
 		},
 	}
 	for k, v := range errorCases {
-		errs := ValidateRoleBinding(&v.A, true)
+		errs := validateRoleBinding(&v.A, true)
 		if len(errs) == 0 {
 			t.Errorf("expected failure %s for %v", k, v.A)
 			continue
@@ -138,7 +129,7 @@ func TestValidateRoleBindingUpdate(t *testing.T) {
 		RoleRef:    api.ObjectReference{Namespace: "master", Name: "valid"},
 	}
 
-	errs := ValidateRoleBindingUpdate(
+	errs := validateRoleBindingUpdate(
 		&rbac.RoleBinding{
 			ObjectMeta: api.ObjectMeta{Namespace: api.NamespaceDefault, Name: "master", ResourceVersion: "1"},
 			RoleRef:    api.ObjectReference{Namespace: "master", Name: "valid"},
@@ -165,7 +156,7 @@ func TestValidateRoleBindingUpdate(t *testing.T) {
 		},
 	}
 	for k, v := range errorCases {
-		errs := ValidateRoleBindingUpdate(&v.A, old, true)
+		errs := validateRoleBindingUpdate(&v.A, old, true)
 		if len(errs) == 0 {
 			t.Errorf("expected failure %s for %v", k, v.A)
 			continue
@@ -182,7 +173,7 @@ func TestValidateRoleBindingUpdate(t *testing.T) {
 }
 
 func TestValidateRole(t *testing.T) {
-	errs := ValidateRole(
+	errs := validateRole(
 		&rbac.Role{
 			ObjectMeta: api.ObjectMeta{Namespace: api.NamespaceDefault, Name: "master"},
 		},
@@ -213,7 +204,7 @@ func TestValidateRole(t *testing.T) {
 		},
 	}
 	for k, v := range errorCases {
-		errs := ValidateRole(&v.A, true)
+		errs := validateRole(&v.A, true)
 		if len(errs) == 0 {
 			t.Errorf("expected failure %s for %v", k, v.A)
 			continue
@@ -225,6 +216,31 @@ func TestValidateRole(t *testing.T) {
 			if errs[i].Field != v.F {
 				t.Errorf("%s: expected errors to have field %s: %v", k, v.F, errs[i])
 			}
+		}
+	}
+}
+
+func TestNonResourceURLCovers(t *testing.T) {
+	tests := []struct {
+		owner     string
+		requested string
+		want      bool
+	}{
+		{"*", "/api", true},
+		{"/api", "/api", true},
+		{"/apis", "/api", false},
+		{"/api/v1", "/api", false},
+		{"/api/v1", "/api/v1", true},
+		{"/api/*", "/api/v1", true},
+		{"/api/*", "/api", false},
+		{"/api/*/*", "/api/v1", false},
+		{"/*/v1/*", "/api/v1", false},
+	}
+
+	for _, tc := range tests {
+		got := nonResourceURLCovers(tc.owner, tc.requested)
+		if got != tc.want {
+			t.Errorf("nonResourceURLCovers(%q, %q): want=(%t), got=(%t)", tc.owner, tc.requested, tc.want, got)
 		}
 	}
 }

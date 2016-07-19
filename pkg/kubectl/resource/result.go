@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -251,7 +251,7 @@ func AsVersionedObjects(infos []*Info, version unversioned.GroupVersion, encoder
 		// objects that are not part of api.Scheme must be converted to JSON
 		// TODO: convert to map[string]interface{}, attach to runtime.Unknown?
 		if !version.IsEmpty() {
-			if _, err := api.Scheme.ObjectKind(info.Object); runtime.IsNotRegisteredError(err) {
+			if _, _, err := api.Scheme.ObjectKinds(info.Object); runtime.IsNotRegisteredError(err) {
 				// TODO: ideally this would encode to version, but we don't expose multiple codecs here.
 				data, err := runtime.Encode(encoder, info.Object)
 				if err != nil {

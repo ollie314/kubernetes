@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -64,7 +64,7 @@ func (hk *HyperKube) FindServer(name string) (*Server, error) {
 	return nil, fmt.Errorf("Server not found: %s", name)
 }
 
-// Servers returns a list of all of the registred servers
+// Servers returns a list of all of the registered servers
 func (hk *HyperKube) Servers() []Server {
 	return hk.servers
 }
@@ -123,8 +123,8 @@ func (hk *HyperKube) Run(args []string) error {
 	command := args[0]
 	baseCommand := path.Base(command)
 	serverName := baseCommand
+	args = args[1:]
 	if serverName == hk.Name {
-		args = args[1:]
 
 		baseFlags := hk.Flags()
 		baseFlags.SetInterspersed(false) // Only parse flags up to the next real command

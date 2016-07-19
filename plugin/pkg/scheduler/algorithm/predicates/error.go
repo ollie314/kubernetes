@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -32,11 +32,13 @@ var (
 	ErrVolumeZoneConflict        = newPredicateFailureError("NoVolumeZoneConflict")
 	ErrNodeSelectorNotMatch      = newPredicateFailureError("MatchNodeSelector")
 	ErrPodAffinityNotMatch       = newPredicateFailureError("MatchInterPodAffinity")
+	ErrTaintsTolerationsNotMatch = newPredicateFailureError("PodToleratesNodeTaints")
 	ErrPodNotMatchHostName       = newPredicateFailureError("HostName")
 	ErrPodNotFitsHostPorts       = newPredicateFailureError("PodFitsHostPorts")
 	ErrNodeLabelPresenceViolated = newPredicateFailureError("CheckNodeLabelPresence")
 	ErrServiceAffinityViolated   = newPredicateFailureError("CheckServiceAffinity")
 	ErrMaxVolumeCountExceeded    = newPredicateFailureError("MaxVolumeCount")
+	ErrNodeUnderMemoryPressure   = newPredicateFailureError("NodeUnderMemoryPressure")
 	// ErrFakePredicate is used for test only. The fake predicates returning false also returns error
 	// as ErrFakePredicate.
 	ErrFakePredicate = newPredicateFailureError("FakePredicateError")

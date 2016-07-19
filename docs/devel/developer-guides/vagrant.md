@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.2/docs/devel/developer-guides/vagrant.md).
+[here](http://releases.k8s.io/release-1.3/docs/devel/developer-guides/vagrant.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -278,7 +278,7 @@ Congratulations!
 ### Testing
 
 The following will run all of the end-to-end testing scenarios assuming you set
-your environment in `cluster/kube-env.sh`:
+your environment:
 
 ```shell
 NUM_NODES=3 go run hack/e2e.go -v --build --up --test --down

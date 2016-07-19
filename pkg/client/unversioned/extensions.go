@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ type ExtensionsInterface interface {
 	DeploymentsNamespacer
 	JobsNamespacer
 	IngressNamespacer
+	NetworkPolicyNamespacer
 	ThirdPartyResourceNamespacer
 	ReplicaSetsNamespacer
 	PodSecurityPoliciesInterface
@@ -67,6 +68,10 @@ func (c *ExtensionsClient) Jobs(namespace string) JobInterface {
 
 func (c *ExtensionsClient) Ingress(namespace string) IngressInterface {
 	return newIngress(c, namespace)
+}
+
+func (c *ExtensionsClient) NetworkPolicies(namespace string) NetworkPolicyInterface {
+	return newNetworkPolicies(c, namespace)
 }
 
 func (c *ExtensionsClient) ThirdPartyResources() ThirdPartyResourceInterface {
@@ -121,13 +126,6 @@ func setExtensionsDefaults(config *restclient.Config) error {
 	config.GroupVersion = &copyGroupVersion
 	//}
 
-	config.Codec = api.Codecs.LegacyCodec(*config.GroupVersion)
 	config.NegotiatedSerializer = api.Codecs
-	if config.QPS == 0 {
-		config.QPS = 5
-	}
-	if config.Burst == 0 {
-		config.Burst = 10
-	}
 	return nil
 }

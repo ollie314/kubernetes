@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -152,10 +152,11 @@ func (t *Tester) TestWatch(valid runtime.Object, labelsPass, labelsFail []labels
 // =============================================================================
 // get codec based on runtime.Object
 func getCodec(obj runtime.Object) (runtime.Codec, error) {
-	fqKind, err := api.Scheme.ObjectKind(obj)
+	fqKinds, _, err := api.Scheme.ObjectKinds(obj)
 	if err != nil {
 		return nil, fmt.Errorf("unexpected encoding error: %v", err)
 	}
+	fqKind := fqKinds[0]
 	// TODO: caesarxuchao: we should detect which group an object belongs to
 	// by using the version returned by Schem.ObjectVersionAndKind() once we
 	// split the schemes for internal objects.

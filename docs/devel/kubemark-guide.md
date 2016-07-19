@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.2/docs/devel/kubemark-guide.md).
+[here](http://releases.k8s.io/release-1.3/docs/devel/kubemark-guide.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -76,7 +76,7 @@ Common workflow for Kubemark is:
 - monitoring test execution and debugging problems
 - turning down Kubemark cluster
 
-Included in descrptions there will be comments helpful for anyone who’ll want to
+Included in descriptions there will be comments helpful for anyone who’ll want to
 port Kubemark to different providers.
 
 ### Starting a Kubemark cluster

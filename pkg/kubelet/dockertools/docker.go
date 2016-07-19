@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	dockerref "github.com/docker/distribution/reference"
 	"github.com/docker/docker/pkg/jsonmessage"
@@ -52,8 +53,8 @@ const (
 	milliCPUToCPU = 1000
 
 	// 100000 is equivalent to 100ms
-	quotaPeriod   = 100000
-	minQuotaPerod = 1000
+	quotaPeriod    = 100000
+	minQuotaPeriod = 1000
 )
 
 // DockerInterface is an abstract interface for testability.  It abstracts the interface of docker client.
@@ -76,6 +77,8 @@ type DockerInterface interface {
 	StartExec(string, dockertypes.ExecStartCheck, StreamOptions) error
 	InspectExec(id string) (*dockertypes.ContainerExecInspect, error)
 	AttachToContainer(string, dockertypes.ContainerAttachOptions, StreamOptions) error
+	ResizeContainerTTY(id string, height, width int) error
+	ResizeExecTTY(id string, height, width int) error
 }
 
 // KubeletContainerName encapsulates a pod name and a Kubernetes container name.
@@ -311,8 +314,11 @@ func getDockerClient(dockerEndpoint string) (*dockerapi.Client, error) {
 
 // ConnectToDockerOrDie creates docker client connecting to docker daemon.
 // If the endpoint passed in is "fake://", a fake docker client
-// will be returned. The program exits if error occurs.
-func ConnectToDockerOrDie(dockerEndpoint string) DockerInterface {
+// will be returned. The program exits if error occurs. The requestTimeout
+// is the timeout for docker requests. If timeout is exceeded, the request
+// will be cancelled and throw out an error. If requestTimeout is 0, a default
+// value will be applied.
+func ConnectToDockerOrDie(dockerEndpoint string, requestTimeout time.Duration) DockerInterface {
 	if dockerEndpoint == "fake://" {
 		return NewFakeDockerClient()
 	}
@@ -320,7 +326,8 @@ func ConnectToDockerOrDie(dockerEndpoint string) DockerInterface {
 	if err != nil {
 		glog.Fatalf("Couldn't connect to docker: %v", err)
 	}
-	return newKubeDockerClient(client)
+	glog.Infof("Start docker client with request timeout=%v", requestTimeout)
+	return newKubeDockerClient(client, requestTimeout)
 }
 
 // milliCPUToQuota converts milliCPU to CFS quota and period values
@@ -343,8 +350,8 @@ func milliCPUToQuota(milliCPU int64) (quota int64, period int64) {
 	quota = (milliCPU * quotaPeriod) / milliCPUToCPU
 
 	// quota needs to be a minimum of 1ms.
-	if quota < minQuotaPerod {
-		quota = minQuotaPerod
+	if quota < minQuotaPeriod {
+		quota = minQuotaPeriod
 	}
 
 	return
@@ -367,7 +374,6 @@ func milliCPUToShares(milliCPU int64) int64 {
 
 // GetKubeletDockerContainers lists all container or just the running ones.
 // Returns a list of docker containers that we manage
-// TODO: Move this function with dockerCache to DockerManager.
 func GetKubeletDockerContainers(client DockerInterface, allContainers bool) ([]*dockertypes.Container, error) {
 	result := []*dockertypes.Container{}
 	containers, err := client.ListContainers(dockertypes.ContainerListOptions{All: allContainers})
@@ -381,9 +387,7 @@ func GetKubeletDockerContainers(client DockerInterface, allContainers bool) ([]*
 		}
 		// Skip containers that we didn't create to allow users to manually
 		// spin up their own containers if they want.
-		// TODO(dchen1107): Remove the old separator "--" by end of Oct
-		if !strings.HasPrefix(container.Names[0], "/"+containerNamePrefix+"_") &&
-			!strings.HasPrefix(container.Names[0], "/"+containerNamePrefix+"--") {
+		if !strings.HasPrefix(container.Names[0], "/"+containerNamePrefix+"_") {
 			glog.V(3).Infof("Docker Container: %s is not managed by kubelet.", container.Names[0])
 			continue
 		}

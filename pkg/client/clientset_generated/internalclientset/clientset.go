@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,8 +20,10 @@ import (
 	"github.com/golang/glog"
 	unversionedautoscaling "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/autoscaling/unversioned"
 	unversionedbatch "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/batch/unversioned"
+	unversionedcertificates "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/certificates/unversioned"
 	unversionedcore "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/unversioned"
 	unversionedextensions "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/extensions/unversioned"
+	unversionedrbac "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/rbac/unversioned"
 	restclient "k8s.io/kubernetes/pkg/client/restclient"
 	discovery "k8s.io/kubernetes/pkg/client/typed/discovery"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
@@ -33,6 +35,8 @@ type Interface interface {
 	Extensions() unversionedextensions.ExtensionsInterface
 	Autoscaling() unversionedautoscaling.AutoscalingInterface
 	Batch() unversionedbatch.BatchInterface
+	Rbac() unversionedrbac.RbacInterface
+	Certificates() unversionedcertificates.CertificatesInterface
 }
 
 // Clientset contains the clients for groups. Each group has exactly one
@@ -43,6 +47,8 @@ type Clientset struct {
 	*unversionedextensions.ExtensionsClient
 	*unversionedautoscaling.AutoscalingClient
 	*unversionedbatch.BatchClient
+	*unversionedrbac.RbacClient
+	*unversionedcertificates.CertificatesClient
 }
 
 // Core retrieves the CoreClient
@@ -77,6 +83,22 @@ func (c *Clientset) Batch() unversionedbatch.BatchInterface {
 	return c.BatchClient
 }
 
+// Rbac retrieves the RbacClient
+func (c *Clientset) Rbac() unversionedrbac.RbacInterface {
+	if c == nil {
+		return nil
+	}
+	return c.RbacClient
+}
+
+// Certificates retrieves the CertificatesClient
+func (c *Clientset) Certificates() unversionedcertificates.CertificatesInterface {
+	if c == nil {
+		return nil
+	}
+	return c.CertificatesClient
+}
+
 // Discovery retrieves the DiscoveryClient
 func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 	return c.DiscoveryClient
@@ -92,26 +114,35 @@ func NewForConfig(c *restclient.Config) (*Clientset, error) {
 	var err error
 	clientset.CoreClient, err = unversionedcore.NewForConfig(&configShallowCopy)
 	if err != nil {
-		return &clientset, err
+		return nil, err
 	}
 	clientset.ExtensionsClient, err = unversionedextensions.NewForConfig(&configShallowCopy)
 	if err != nil {
-		return &clientset, err
+		return nil, err
 	}
 	clientset.AutoscalingClient, err = unversionedautoscaling.NewForConfig(&configShallowCopy)
 	if err != nil {
-		return &clientset, err
+		return nil, err
 	}
 	clientset.BatchClient, err = unversionedbatch.NewForConfig(&configShallowCopy)
 	if err != nil {
-		return &clientset, err
+		return nil, err
+	}
+	clientset.RbacClient, err = unversionedrbac.NewForConfig(&configShallowCopy)
+	if err != nil {
+		return nil, err
+	}
+	clientset.CertificatesClient, err = unversionedcertificates.NewForConfig(&configShallowCopy)
+	if err != nil {
+		return nil, err
 	}
 
 	clientset.DiscoveryClient, err = discovery.NewDiscoveryClientForConfig(&configShallowCopy)
 	if err != nil {
 		glog.Errorf("failed to create the DiscoveryClient: %v", err)
+		return nil, err
 	}
-	return &clientset, err
+	return &clientset, nil
 }
 
 // NewForConfigOrDie creates a new Clientset for the given config and
@@ -122,6 +153,8 @@ func NewForConfigOrDie(c *restclient.Config) *Clientset {
 	clientset.ExtensionsClient = unversionedextensions.NewForConfigOrDie(c)
 	clientset.AutoscalingClient = unversionedautoscaling.NewForConfigOrDie(c)
 	clientset.BatchClient = unversionedbatch.NewForConfigOrDie(c)
+	clientset.RbacClient = unversionedrbac.NewForConfigOrDie(c)
+	clientset.CertificatesClient = unversionedcertificates.NewForConfigOrDie(c)
 
 	clientset.DiscoveryClient = discovery.NewDiscoveryClientForConfigOrDie(c)
 	return &clientset
@@ -134,6 +167,8 @@ func New(c *restclient.RESTClient) *Clientset {
 	clientset.ExtensionsClient = unversionedextensions.New(c)
 	clientset.AutoscalingClient = unversionedautoscaling.New(c)
 	clientset.BatchClient = unversionedbatch.New(c)
+	clientset.RbacClient = unversionedrbac.New(c)
+	clientset.CertificatesClient = unversionedcertificates.New(c)
 
 	clientset.DiscoveryClient = discovery.NewDiscoveryClient(c)
 	return &clientset

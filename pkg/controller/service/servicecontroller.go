@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -125,7 +125,7 @@ func (s *ServiceController) Run(serviceSyncPeriod, nodeSyncPeriod time.Duration)
 		return err
 	}
 
-	// We have to make this check beecause the ListWatch that we use in
+	// We have to make this check because the ListWatch that we use in
 	// WatchServices requires Client functions that aren't in the interface
 	// for some reason.
 	if _, ok := s.kubeClient.(*clientset.Clientset); !ok {
@@ -184,29 +184,32 @@ func (s *ServiceController) init() error {
 // Loop infinitely, processing all service updates provided by the queue.
 func (s *ServiceController) watchServices(serviceQueue *cache.DeltaFIFO) {
 	for {
-		newItem := serviceQueue.Pop()
-		deltas, ok := newItem.(cache.Deltas)
-		if !ok {
-			glog.Errorf("Received object from service watcher that wasn't Deltas: %+v", newItem)
-		}
-		delta := deltas.Newest()
-		if delta == nil {
-			glog.Errorf("Received nil delta from watcher queue.")
-			continue
-		}
-		err, retryDelay := s.processDelta(delta)
-		if retryDelay != 0 {
-			// Add the failed service back to the queue so we'll retry it.
-			glog.Errorf("Failed to process service delta. Retrying in %s: %v", retryDelay, err)
-			go func(deltas cache.Deltas, delay time.Duration) {
-				time.Sleep(delay)
-				if err := serviceQueue.AddIfNotPresent(deltas); err != nil {
-					glog.Errorf("Error requeuing service delta - will not retry: %v", err)
-				}
-			}(deltas, retryDelay)
-		} else if err != nil {
-			runtime.HandleError(fmt.Errorf("Failed to process service delta. Not retrying: %v", err))
-		}
+		serviceQueue.Pop(func(obj interface{}) error {
+			deltas, ok := obj.(cache.Deltas)
+			if !ok {
+				runtime.HandleError(fmt.Errorf("Received object from service watcher that wasn't Deltas: %+v", obj))
+				return nil
+			}
+			delta := deltas.Newest()
+			if delta == nil {
+				runtime.HandleError(fmt.Errorf("Received nil delta from watcher queue."))
+				return nil
+			}
+			err, retryDelay := s.processDelta(delta)
+			if retryDelay != 0 {
+				// Add the failed service back to the queue so we'll retry it.
+				runtime.HandleError(fmt.Errorf("Failed to process service delta. Retrying in %s: %v", retryDelay, err))
+				go func(deltas cache.Deltas, delay time.Duration) {
+					time.Sleep(delay)
+					if err := serviceQueue.AddIfNotPresent(deltas); err != nil {
+						runtime.HandleError(fmt.Errorf("Error requeuing service delta - will not retry: %v", err))
+					}
+				}(deltas, retryDelay)
+			} else if err != nil {
+				runtime.HandleError(fmt.Errorf("Failed to process service delta. Not retrying: %v", err))
+			}
+			return nil
+		})
 	}
 }
 
@@ -404,7 +407,7 @@ func (s *ServiceController) createLoadBalancer(service *api.Service) error {
 	// - Only one protocol supported per service
 	// - Not all cloud providers support all protocols and the next step is expected to return
 	//   an error for unsupported protocols
-	status, err := s.balancer.EnsureLoadBalancer(service, hostsFromNodeList(&nodes), service.ObjectMeta.Annotations)
+	status, err := s.balancer.EnsureLoadBalancer(service, hostsFromNodeList(&nodes))
 	if err != nil {
 		return err
 	} else {
@@ -626,19 +629,32 @@ func stringSlicesEqual(x, y []string) bool {
 	return true
 }
 
+func includeNodeFromNodeList(node *api.Node) bool {
+	return !node.Spec.Unschedulable
+}
+
 func hostsFromNodeList(list *api.NodeList) []string {
 	result := []string{}
 	for ix := range list.Items {
-		if list.Items[ix].Spec.Unschedulable {
-			continue
+		if includeNodeFromNodeList(&list.Items[ix]) {
+			result = append(result, list.Items[ix].Name)
 		}
-		result = append(result, list.Items[ix].Name)
+	}
+	return result
+}
+
+func hostsFromNodeSlice(nodes []*api.Node) []string {
+	result := []string{}
+	for _, node := range nodes {
+		if includeNodeFromNodeList(node) {
+			result = append(result, node.Name)
+		}
 	}
 	return result
 }
 
 func getNodeConditionPredicate() cache.NodeConditionPredicate {
-	return func(node api.Node) bool {
+	return func(node *api.Node) bool {
 		// We add the master to the node list, but its unschedulable.  So we use this to filter
 		// the master.
 		// TODO: Use a node annotation to indicate the master
@@ -672,7 +688,7 @@ func (s *ServiceController) nodeSyncLoop(period time.Duration) {
 			glog.Errorf("Failed to retrieve current set of nodes from node lister: %v", err)
 			continue
 		}
-		newHosts := hostsFromNodeList(&nodes)
+		newHosts := hostsFromNodeSlice(nodes)
 		if stringSlicesEqual(newHosts, prevHosts) {
 			// The set of nodes in the cluster hasn't changed, but we can retry
 			// updating any services that we failed to update last time around.

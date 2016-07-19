@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.2/docs/design/security.md).
+[here](http://releases.k8s.io/release-1.3/docs/design/security.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -204,7 +204,7 @@ arbitrary containers on hosts, to gain access to any protected information
 stored in either volumes or in pods (such as access tokens or shared secrets
 provided as environment variables), to intercept and redirect traffic from
 running services by inserting middlemen, or to simply delete the entire history
-of the custer.
+of the cluster.
 
 As a general principle, access to the central data store should be restricted to
 the components that need full control over the system and which can apply

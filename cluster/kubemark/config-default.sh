@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2015 The Kubernetes Authors All rights reserved.
+# Copyright 2015 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,8 @@ MASTER_DISK_SIZE=${MASTER_DISK_SIZE:-20GB}
 REGISTER_MASTER_KUBELET=${REGISTER_MASTER:-false}
 PREEMPTIBLE_NODE=${PREEMPTIBLE_NODE:-false}
 
-OS_DISTRIBUTION=${KUBE_OS_DISTRIBUTION:-debian}
+MASTER_OS_DISTRIBUTION=${KUBE_MASTER_OS_DISTRIBUTION:-debian}
+NODE_OS_DISTRIBUTION=${KUBE_NODE_OS_DISTRIBUTION:-debian}
 MASTER_IMAGE=${KUBE_GCE_MASTER_IMAGE:-container-vm-v20160321}
 MASTER_IMAGE_PROJECT=${KUBE_GCE_MASTER_PROJECT:-google-containers}
 

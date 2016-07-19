@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -179,8 +179,8 @@ func (r *Request) Resource(resource string) *Request {
 		r.err = fmt.Errorf("resource already set to %q, cannot change to %q", r.resource, resource)
 		return r
 	}
-	if ok, msg := validation.IsValidPathSegmentName(resource); !ok {
-		r.err = fmt.Errorf("invalid resource %q: %s", resource, msg)
+	if msgs := validation.IsValidPathSegmentName(resource); len(msgs) != 0 {
+		r.err = fmt.Errorf("invalid resource %q: %v", resource, msgs)
 		return r
 	}
 	r.resource = resource
@@ -199,8 +199,8 @@ func (r *Request) SubResource(subresources ...string) *Request {
 		return r
 	}
 	for _, s := range subresources {
-		if ok, msg := validation.IsValidPathSegmentName(s); !ok {
-			r.err = fmt.Errorf("invalid subresource %q: %s", s, msg)
+		if msgs := validation.IsValidPathSegmentName(s); len(msgs) != 0 {
+			r.err = fmt.Errorf("invalid subresource %q: %v", s, msgs)
 			return r
 		}
 	}
@@ -221,8 +221,8 @@ func (r *Request) Name(resourceName string) *Request {
 		r.err = fmt.Errorf("resource name already set to %q, cannot change to %q", r.resourceName, resourceName)
 		return r
 	}
-	if ok, msg := validation.IsValidPathSegmentName(resourceName); !ok {
-		r.err = fmt.Errorf("invalid resource name %q: %s", resourceName, msg)
+	if msgs := validation.IsValidPathSegmentName(resourceName); len(msgs) != 0 {
+		r.err = fmt.Errorf("invalid resource name %q: %v", resourceName, msgs)
 		return r
 	}
 	r.resourceName = resourceName
@@ -238,8 +238,8 @@ func (r *Request) Namespace(namespace string) *Request {
 		r.err = fmt.Errorf("namespace already set to %q, cannot change to %q", r.namespace, namespace)
 		return r
 	}
-	if ok, msg := validation.IsValidPathSegmentName(namespace); !ok {
-		r.err = fmt.Errorf("invalid namespace %q: %s", namespace, msg)
+	if msgs := validation.IsValidPathSegmentName(namespace); len(msgs) != 0 {
+		r.err = fmt.Errorf("invalid namespace %q: %v", namespace, msgs)
 		return r
 	}
 	r.namespaceSet = true
@@ -538,11 +538,11 @@ func (r *Request) Body(obj interface{}) *Request {
 			r.err = err
 			return r
 		}
-		glog.V(8).Infof("Request Body: %s", string(data))
-		r.body = bytes.NewBuffer(data)
+		glog.V(8).Infof("Request Body: %#v", string(data))
+		r.body = bytes.NewReader(data)
 	case []byte:
-		glog.V(8).Infof("Request Body: %s", string(t))
-		r.body = bytes.NewBuffer(t)
+		glog.V(8).Infof("Request Body: %#v", string(t))
+		r.body = bytes.NewReader(t)
 	case io.Reader:
 		r.body = t
 	case runtime.Object:
@@ -555,8 +555,8 @@ func (r *Request) Body(obj interface{}) *Request {
 			r.err = err
 			return r
 		}
-		glog.V(8).Infof("Request Body: %s", string(data))
-		r.body = bytes.NewBuffer(data)
+		glog.V(8).Infof("Request Body: %#v", string(data))
+		r.body = bytes.NewReader(data)
 		r.SetHeader("Content-Type", r.content.ContentType)
 	default:
 		r.err = fmt.Errorf("unknown type used for body: %+v", obj)
@@ -573,7 +573,7 @@ func (r *Request) URL() *url.URL {
 	if len(r.resource) != 0 {
 		p = path.Join(p, strings.ToLower(r.resource))
 	}
-	// Join trims trailing slashes, so preserve r.pathPrefix's trailing slash for backwards compat if nothing was changed
+	// Join trims trailing slashes, so preserve r.pathPrefix's trailing slash for backwards compatibility if nothing was changed
 	if len(r.resourceName) != 0 || len(r.subpath) != 0 || len(r.subresource) != 0 {
 		p = path.Join(p, r.resourceName, r.subresource, r.subpath)
 	}
@@ -823,6 +823,15 @@ func (r *Request) request(fn func(*http.Request, *http.Response)) error {
 
 			retries++
 			if seconds, wait := checkWait(resp); wait && retries < maxRetries {
+				if seeker, ok := r.body.(io.Seeker); ok && r.body != nil {
+					_, err := seeker.Seek(0, 0)
+					if err != nil {
+						glog.V(4).Infof("Could not retry request, can't Seek() back to beginning of body for %T", r.body)
+						fn(req, resp)
+						return true
+					}
+				}
+
 				glog.V(4).Infof("Got a Retry-After %s response for attempt %d to %v", seconds, retries, url)
 				r.backoffMgr.Sleep(time.Duration(seconds) * time.Second)
 				return false
@@ -879,7 +888,7 @@ func (r *Request) transformResponse(resp *http.Response, req *http.Request) Resu
 			body = data
 		}
 	}
-	glog.V(8).Infof("Response Body: %s", string(body))
+	glog.V(8).Infof("Response Body: %#v", string(body))
 
 	// Did the server give us a status response?
 	isStatusResponse := false
@@ -961,7 +970,7 @@ func (r *Request) transformUnstructuredResponseError(resp *http.Response, req *h
 			body = data
 		}
 	}
-	glog.V(8).Infof("Response Body: %s", string(body))
+	glog.V(8).Infof("Response Body: %#v", string(body))
 
 	message := "unknown"
 	if isTextResponse(resp) {

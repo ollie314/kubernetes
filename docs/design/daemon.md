@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.2/docs/design/daemon.md).
+[here](http://releases.k8s.io/release-1.3/docs/design/daemon.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -174,7 +174,7 @@ upgradable, and more generally could not be managed through the API server
 interface.
 
 A third alternative is to generalize the Replication Controller. We would do
-something like: if you set the `replicas` field of the ReplicationConrollerSpec
+something like: if you set the `replicas` field of the ReplicationControllerSpec
 to -1, then it means "run exactly one replica on every node matching the
 nodeSelector in the pod template." The ReplicationController would pretend
 `replicas` had been set to some large number -- larger than the largest number

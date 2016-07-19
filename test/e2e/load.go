@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -82,8 +82,13 @@ var _ = framework.KubeDescribe("Load capacity", func() {
 	BeforeEach(func() {
 		c = f.Client
 
+		// In large clusters we may get to this point but still have a bunch
+		// of nodes without Routes created. Since this would make a node
+		// unschedulable, we need to wait until all of them are schedulable.
+		framework.ExpectNoError(framework.WaitForAllNodesSchedulable(c))
+
 		ns = f.Namespace.Name
-		nodes := framework.ListSchedulableNodesOrDie(c)
+		nodes := framework.GetReadySchedulableNodesOrDie(c)
 		nodeCount = len(nodes.Items)
 		Expect(nodeCount).NotTo(BeZero())
 
@@ -168,9 +173,9 @@ var _ = framework.KubeDescribe("Load capacity", func() {
 			By("============================================================================")
 
 			// Cleanup all created replication controllers.
-			// Currently we assume 5 pods/second average deletion throughput.
+			// Currently we assume 10 pods/second average deletion throughput.
 			// We may want to revisit it in the future.
-			deletingTime := time.Duration(totalPods/5) * time.Second
+			deletingTime := time.Duration(totalPods/10) * time.Second
 			deleteAllRC(configs, deletingTime)
 			if createServices == "true" {
 				for _, service := range services {

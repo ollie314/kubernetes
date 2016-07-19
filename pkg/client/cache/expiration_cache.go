@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -73,7 +73,7 @@ type timestampedEntry struct {
 	timestamp time.Time
 }
 
-// getTimestampedEntry returnes the timestampedEntry stored under the given key.
+// getTimestampedEntry returns the timestampedEntry stored under the given key.
 func (c *ExpirationCache) getTimestampedEntry(key string) (*timestampedEntry, bool) {
 	item, _ := c.cacheStorage.Get(key)
 	if tsEntry, ok := item.(*timestampedEntry); ok {
@@ -146,6 +146,7 @@ func (c *ExpirationCache) ListKeys() []string {
 func (c *ExpirationCache) Add(obj interface{}) error {
 	c.expirationLock.Lock()
 	defer c.expirationLock.Unlock()
+
 	key, err := c.keyFunc(obj)
 	if err != nil {
 		return KeyError{obj, err}
@@ -189,6 +190,11 @@ func (c *ExpirationCache) Replace(list []interface{}, resourceVersion string) er
 	}
 	c.cacheStorage.Replace(items, resourceVersion)
 	return nil
+}
+
+// Resync will touch all objects to put them into the processing queue
+func (c *ExpirationCache) Resync() error {
+	return c.cacheStorage.Resync()
 }
 
 // NewTTLStore creates and returns a ExpirationCache with a TTLPolicy

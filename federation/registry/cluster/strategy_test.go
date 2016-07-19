@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -54,13 +54,11 @@ func validNewCluster() *federation.Cluster {
 }
 
 func invalidNewCluster() *federation.Cluster {
+	// Create a cluster with empty ServerAddressByClientCIDRs (which is a required field).
 	return &federation.Cluster{
 		ObjectMeta: api.ObjectMeta{
 			Name:            "foo2",
 			ResourceVersion: "5",
-		},
-		Spec: federation.ClusterSpec{
-			Credential: "bar",
 		},
 		Status: federation.ClusterStatus{
 			Conditions: []federation.ClusterCondition{

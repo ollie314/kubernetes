@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -237,7 +237,7 @@ func (a *HorizontalController) computeReplicasForCustomMetrics(hpa *autoscaling.
 		}
 		statusList.Items = append(statusList.Items, extensions.CustomMetricCurrentStatus{
 			Name:         customMetricTarget.Name,
-			CurrentValue: *quantity,
+			CurrentValue: quantity,
 		})
 	}
 	byteStatusList, err := json.Marshal(statusList)

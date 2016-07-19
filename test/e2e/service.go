@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -69,9 +69,7 @@ var _ = framework.KubeDescribe("Services", func() {
 	var c *client.Client
 
 	BeforeEach(func() {
-		var err error
-		c, err = framework.LoadClient()
-		Expect(err).NotTo(HaveOccurred())
+		c = f.Client
 	})
 
 	// TODO: We get coverage of TCP/UDP and multi-port services through the DNS test. We should have a simpler test for multi-port TCP here.
@@ -331,8 +329,7 @@ var _ = framework.KubeDescribe("Services", func() {
 
 	It("should work after restarting apiserver [Disruptive]", func() {
 		// TODO: use the ServiceTestJig here
-		// TODO: framework.RestartApiserver doesn't work in GKE - fix it and reenable this test.
-		framework.SkipUnlessProviderIs("gce")
+		framework.SkipUnlessProviderIs("gce", "gke")
 
 		ns := f.Namespace.Name
 		numPods, servicePort := 3, 80
@@ -351,7 +348,7 @@ var _ = framework.KubeDescribe("Services", func() {
 		framework.ExpectNoError(verifyServeHostnameServiceUp(c, ns, host, podNames1, svc1IP, servicePort))
 
 		// Restart apiserver
-		if err := framework.RestartApiserver(); err != nil {
+		if err := framework.RestartApiserver(c); err != nil {
 			framework.Failf("error restarting apiserver: %v", err)
 		}
 		if err := framework.WaitForApiserverUp(c); err != nil {
@@ -946,12 +943,12 @@ var _ = framework.KubeDescribe("Services", func() {
 		svcName := fmt.Sprintf("%v.%v", serviceName, f.Namespace.Name)
 		By("waiting for endpoints of Service with DNS name " + svcName)
 
-		createExecPodOrFail(f.Client, f.Namespace.Name, "exec")
+		execPodName := createExecPodOrFail(f.Client, f.Namespace.Name, "execpod-")
 		cmd := fmt.Sprintf("wget -qO- %v", svcName)
 		var stdout string
 		if pollErr := wait.PollImmediate(framework.Poll, kubeProxyLagTimeout, func() (bool, error) {
 			var err error
-			stdout, err = framework.RunHostCmd(f.Namespace.Name, "exec", cmd)
+			stdout, err = framework.RunHostCmd(f.Namespace.Name, execPodName, cmd)
 			if err != nil {
 				framework.Logf("expected un-ready endpoint for Service %v, stdout: %v, err %v", t.name, stdout, err)
 				return false, nil
@@ -1097,13 +1094,14 @@ func validateEndpointsOrFail(c *client.Client, namespace, serviceName string, ex
 
 // createExecPodOrFail creates a simple busybox pod in a sleep loop used as a
 // vessel for kubectl exec commands.
-func createExecPodOrFail(c *client.Client, ns, name string) {
+// Returns the name of the created pod.
+func createExecPodOrFail(c *client.Client, ns, generateName string) string {
 	framework.Logf("Creating new exec pod")
 	immediate := int64(0)
 	pod := &api.Pod{
 		ObjectMeta: api.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
+			GenerateName: generateName,
+			Namespace:    ns,
 		},
 		Spec: api.PodSpec{
 			TerminationGracePeriodSeconds: &immediate,
@@ -1116,16 +1114,17 @@ func createExecPodOrFail(c *client.Client, ns, name string) {
 			},
 		},
 	}
-	_, err := c.Pods(ns).Create(pod)
+	created, err := c.Pods(ns).Create(pod)
 	Expect(err).NotTo(HaveOccurred())
 	err = wait.PollImmediate(framework.Poll, 5*time.Minute, func() (bool, error) {
-		retrievedPod, err := c.Pods(pod.Namespace).Get(pod.Name)
+		retrievedPod, err := c.Pods(pod.Namespace).Get(created.Name)
 		if err != nil {
 			return false, nil
 		}
 		return retrievedPod.Status.Phase == api.PodRunning, nil
 	})
 	Expect(err).NotTo(HaveOccurred())
+	return created.Name
 }
 
 func createPodOrFail(c *client.Client, ns, name string, labels map[string]string, containerPorts []api.ContainerPort) {
@@ -1138,8 +1137,8 @@ func createPodOrFail(c *client.Client, ns, name string, labels map[string]string
 		Spec: api.PodSpec{
 			Containers: []api.Container{
 				{
-					Name:  "test",
-					Image: "gcr.io/google_containers/pause-amd64:3.0",
+					Name:  "pause",
+					Image: framework.GetPauseImageName(c),
 					Ports: containerPorts,
 					// Add a dummy environment variable to work around a docker issue.
 					// https://github.com/docker/docker/issues/14203
@@ -1173,7 +1172,7 @@ func collectAddresses(nodes *api.NodeList, addressType api.NodeAddressType) []st
 }
 
 func getNodePublicIps(c *client.Client) ([]string, error) {
-	nodes := framework.ListSchedulableNodesOrDie(c)
+	nodes := framework.GetReadySchedulableNodesOrDie(c)
 
 	ips := collectAddresses(nodes, api.NodeExternalIP)
 	if len(ips) == 0 {
@@ -1409,8 +1408,7 @@ func stopServeHostnameService(c *client.Client, ns, name string) error {
 // in the cluster. Each pod in the service is expected to echo its name. These
 // names are compared with the given expectedPods list after a sort | uniq.
 func verifyServeHostnameServiceUp(c *client.Client, ns, host string, expectedPods []string, serviceIP string, servicePort int) error {
-	execPodName := "execpod"
-	createExecPodOrFail(c, ns, execPodName)
+	execPodName := createExecPodOrFail(c, ns, "execpod-")
 	defer func() {
 		deletePodOrFail(c, ns, execPodName)
 	}()

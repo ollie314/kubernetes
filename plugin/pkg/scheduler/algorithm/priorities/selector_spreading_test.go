@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -664,20 +664,18 @@ func TestZoneSpreadPriority(t *testing.T) {
 	}
 }
 
-func makeLabeledNodeList(nodeMap map[string]map[string]string) (result api.NodeList) {
-	nodes := []api.Node{}
+func makeLabeledNodeList(nodeMap map[string]map[string]string) []*api.Node {
+	nodes := make([]*api.Node, 0, len(nodeMap))
 	for nodeName, labels := range nodeMap {
-		nodes = append(nodes, api.Node{ObjectMeta: api.ObjectMeta{Name: nodeName, Labels: labels}})
+		nodes = append(nodes, &api.Node{ObjectMeta: api.ObjectMeta{Name: nodeName, Labels: labels}})
 	}
-	return api.NodeList{Items: nodes}
+	return nodes
 }
 
-func makeNodeList(nodeNames []string) api.NodeList {
-	result := api.NodeList{
-		Items: make([]api.Node, len(nodeNames)),
+func makeNodeList(nodeNames []string) []*api.Node {
+	nodes := make([]*api.Node, 0, len(nodeNames))
+	for _, nodeName := range nodeNames {
+		nodes = append(nodes, &api.Node{ObjectMeta: api.ObjectMeta{Name: nodeName}})
 	}
-	for ix := range nodeNames {
-		result.Items[ix].Name = nodeNames[ix]
-	}
-	return result
+	return nodes
 }

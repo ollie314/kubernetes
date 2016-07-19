@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -44,6 +44,8 @@ const (
 type Config struct {
 	// PressureTransitionPeriod is duration the kubelet has to wait before transititioning out of a pressure condition.
 	PressureTransitionPeriod time.Duration
+	// Maximum allowed grace period (in seconds) to use when terminating pods in response to a soft eviction threshold being met.
+	MaxPodGracePeriodSeconds int64
 	// Thresholds define the set of conditions monitored to trigger eviction.
 	Thresholds []Threshold
 }
@@ -55,7 +57,7 @@ type Threshold struct {
 	// Operator represents a relationship of a signal to a value.
 	Operator ThresholdOperator
 	// value is a quantity associated with the signal that is evaluated against the specified operator.
-	Value resource.Quantity
+	Value *resource.Quantity
 	// GracePeriod represents the amount of time that a threshold must be met before eviction is triggered.
 	GracePeriod time.Duration
 }
@@ -88,7 +90,7 @@ type statsFunc func(pod *api.Pod) (statsapi.PodStats, bool)
 type rankFunc func(pods []*api.Pod, stats statsFunc)
 
 // signalObservations maps a signal to an observed quantity
-type signalObservations map[Signal]resource.Quantity
+type signalObservations map[Signal]*resource.Quantity
 
 // thresholdsObservedAt maps a threshold to a time that it was observed
 type thresholdsObservedAt map[Threshold]time.Time

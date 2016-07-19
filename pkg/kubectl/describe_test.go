@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/kubernetes/federation/apis/federation"
+	fed_fake "k8s.io/kubernetes/federation/client/clientset_generated/federation_internalclientset/fake"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/unversioned"
@@ -256,6 +258,21 @@ func TestDescribeContainers(t *testing.T) {
 			},
 			expectedElements: []string{"cpu", "1k", "memory", "4G", "storage", "20G"},
 		},
+		// Using requests.
+		{
+			container: api.Container{
+				Name:  "test",
+				Image: "image",
+				Resources: api.ResourceRequirements{
+					Requests: api.ResourceList{
+						api.ResourceName(api.ResourceCPU):     resource.MustParse("1000"),
+						api.ResourceName(api.ResourceMemory):  resource.MustParse("4G"),
+						api.ResourceName(api.ResourceStorage): resource.MustParse("20G"),
+					},
+				},
+			},
+			expectedElements: []string{"cpu", "1k", "memory", "4G", "storage", "20G"},
+		},
 	}
 
 	for i, testCase := range testCases {
@@ -429,7 +446,7 @@ func TestGetPodsTotalRequests(t *testing.T) {
 		if err != nil {
 			t.Errorf("Unexpected error %v", err)
 		}
-		if !reflect.DeepEqual(reqs, testCase.expectedReqs) {
+		if !api.Semantic.DeepEqual(reqs, testCase.expectedReqs) {
 			t.Errorf("Expected %v, got %v", testCase.expectedReqs, reqs)
 		}
 	}
@@ -522,11 +539,48 @@ func TestDescribeDeployment(t *testing.T) {
 	}
 }
 
+func TestDescribeCluster(t *testing.T) {
+	cluster := federation.Cluster{
+		ObjectMeta: api.ObjectMeta{
+			Name:            "foo",
+			ResourceVersion: "4",
+			Labels: map[string]string{
+				"name": "foo",
+			},
+		},
+		Spec: federation.ClusterSpec{
+			ServerAddressByClientCIDRs: []federation.ServerAddressByClientCIDR{
+				{
+					ClientCIDR:    "0.0.0.0/0",
+					ServerAddress: "localhost:8888",
+				},
+			},
+		},
+		Status: federation.ClusterStatus{
+			Conditions: []federation.ClusterCondition{
+				{Type: federation.ClusterReady, Status: api.ConditionTrue},
+			},
+		},
+	}
+	fake := fed_fake.NewSimpleClientset(&cluster)
+	d := ClusterDescriber{Interface: fake}
+	out, err := d.Describe("any", "foo", DescriberSettings{ShowEvents: true})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "foo") {
+		t.Errorf("unexpected out: %s", out)
+	}
+}
+
 func TestDescribeEvents(t *testing.T) {
 
 	events := &api.EventList{
 		Items: []api.Event{
 			{
+				ObjectMeta: api.ObjectMeta{
+					Namespace: "foo",
+				},
 				Source:         api.EventSource{Component: "kubelet"},
 				Message:        "Item 1",
 				FirstTimestamp: unversioned.NewTime(time.Date(2014, time.January, 15, 0, 0, 0, 0, time.UTC)),
@@ -568,6 +622,15 @@ func TestDescribeEvents(t *testing.T) {
 		// - JobDescriber
 		"NodeDescriber": &NodeDescriber{
 			testclient.NewSimpleFake(&api.Node{
+				ObjectMeta: api.ObjectMeta{
+					Name:      "bar",
+					Namespace: "foo",
+					SelfLink:  "url/url/url",
+				},
+			}, events),
+		},
+		"PersistentVolumeDescriber": &PersistentVolumeDescriber{
+			testclient.NewSimpleFake(&api.PersistentVolume{
 				ObjectMeta: api.ObjectMeta{
 					Name:      "bar",
 					Namespace: "foo",

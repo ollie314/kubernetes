@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import (
 
 type BatchInterface interface {
 	JobsNamespacer
+	ScheduledJobsNamespacer
 }
 
 // BatchClient is used to interact with Kubernetes batch features.
@@ -36,6 +37,10 @@ type BatchClient struct {
 
 func (c *BatchClient) Jobs(namespace string) JobInterface {
 	return newJobsV1(c, namespace)
+}
+
+func (c *BatchClient) ScheduledJobs(namespace string) ScheduledJobInterface {
+	return newScheduledJobs(c, namespace)
 }
 
 func NewBatch(c *restclient.Config) (*BatchClient, error) {
@@ -97,13 +102,6 @@ func setBatchDefaults(config *restclient.Config, gv *unversioned.GroupVersion) e
 	config.GroupVersion = &copyGroupVersion
 	//}
 
-	config.Codec = api.Codecs.LegacyCodec(*config.GroupVersion)
 	config.NegotiatedSerializer = api.Codecs
-	if config.QPS == 0 {
-		config.QPS = 5
-	}
-	if config.Burst == 0 {
-		config.Burst = 10
-	}
 	return nil
 }

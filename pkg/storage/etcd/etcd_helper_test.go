@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -154,10 +154,11 @@ func TestListFiltered(t *testing.T) {
 	}
 
 	createPodList(t, helper, &list)
-	filter := func(obj runtime.Object) bool {
+	filterFunc := func(obj runtime.Object) bool {
 		pod := obj.(*api.Pod)
 		return pod.Name == "bar"
 	}
+	filter := storage.NewSimpleFilter(filterFunc, storage.NoTriggerFunc)
 
 	var got api.PodList
 	err := helper.List(context.TODO(), key, "", filter, &got)

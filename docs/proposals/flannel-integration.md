@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.2/docs/proposals/flannel-integration.md).
+[here](http://releases.k8s.io/release-1.3/docs/proposals/flannel-integration.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -141,7 +141,7 @@ The ick-iest part of this implementation is going to the the `GET /network/lease
 * On each change, figure out the lease for the node, construct a [lease watch result](https://github.com/coreos/flannel/blob/0bf263826eab1707be5262703a8092c7d15e0be4/subnet/subnet.go#L72), and send it down the watch with the RV from the node
 * Implement a lease list that does a similar translation
 
-I say this is gross without an api objet because for each node->lease translation one has to store and retrieve the node metadata sent by flannel (eg: VTEP) from node annotations. [Reference implementation](https://github.com/bprashanth/kubernetes/blob/network_vxlan/pkg/kubelet/flannel_server.go) and [watch proxy](https://github.com/bprashanth/kubernetes/blob/network_vxlan/pkg/kubelet/watch_proxy.go).
+I say this is gross without an api object because for each node->lease translation one has to store and retrieve the node metadata sent by flannel (eg: VTEP) from node annotations. [Reference implementation](https://github.com/bprashanth/kubernetes/blob/network_vxlan/pkg/kubelet/flannel_server.go) and [watch proxy](https://github.com/bprashanth/kubernetes/blob/network_vxlan/pkg/kubelet/watch_proxy.go).
 
 # Limitations
 
