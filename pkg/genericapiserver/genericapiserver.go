@@ -35,6 +35,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apimachinery"
+	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/apiserver"
 	"k8s.io/kubernetes/pkg/auth/authenticator"
 	"k8s.io/kubernetes/pkg/auth/authorizer"
@@ -47,6 +48,7 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/ui"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/async"
 	"k8s.io/kubernetes/pkg/util/crypto"
 	utilnet "k8s.io/kubernetes/pkg/util/net"
 	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
@@ -220,7 +222,7 @@ type GenericAPIServer struct {
 	PublicReadWritePort  int
 	ServiceReadWriteIP   net.IP
 	ServiceReadWritePort int
-	masterServices       *util.Runner
+	masterServices       *async.Runner
 	ExtraServicePorts    []api.ServicePort
 	ExtraEndpointPorts   []api.EndpointPort
 
@@ -283,8 +285,7 @@ func setDefaults(c *Config) {
 		// We should probably allow this for clouds that don't require NodePort to do load-balancing (GCE)
 		// but then that breaks the strict nestedness of ServiceType.
 		// Review post-v1
-		defaultServiceNodePortRange := utilnet.PortRange{Base: 30000, Size: 2768}
-		c.ServiceNodePortRange = defaultServiceNodePortRange
+		c.ServiceNodePortRange = options.DefaultServiceNodePortRange
 		glog.Infof("Node port range unspecified. Defaulting to %v.", c.ServiceNodePortRange)
 	}
 	if c.MasterCount == 0 {
@@ -585,16 +586,18 @@ func verifyEtcdServersList(options *options.ServerRunOptions) {
 	}
 }
 
-func verifySecurePort(options *options.ServerRunOptions) {
+func verifySecureAndInsecurePort(options *options.ServerRunOptions) {
 	if options.SecurePort < 0 || options.SecurePort > 65535 {
 		glog.Fatalf("--secure-port %v must be between 0 and 65535, inclusive. 0 for turning off secure port.", options.SecurePort)
 	}
-}
 
-// TODO: Allow 0 to turn off insecure port.
-func verifyInsecurePort(options *options.ServerRunOptions) {
+	// TODO: Allow 0 to turn off insecure port.
 	if options.InsecurePort < 1 || options.InsecurePort > 65535 {
 		glog.Fatalf("--insecure-port %v must be between 1 and 65535, inclusive.", options.InsecurePort)
+	}
+
+	if options.SecurePort == options.InsecurePort {
+		glog.Fatalf("--secure-port and --insecure-port cannot use the same port.")
 	}
 }
 
@@ -602,8 +605,7 @@ func ValidateRunOptions(options *options.ServerRunOptions) {
 	verifyClusterIPFlags(options)
 	verifyServiceNodePort(options)
 	verifyEtcdServersList(options)
-	verifySecurePort(options)
-	verifyInsecurePort(options)
+	verifySecureAndInsecurePort(options)
 }
 
 func DefaultAndValidateRunOptions(options *options.ServerRunOptions) {
@@ -864,30 +866,30 @@ func (s *GenericAPIServer) getAPIGroupVersion(apiGroupInfo *APIGroupInfo, groupV
 	for k, v := range apiGroupInfo.VersionedResourcesStorageMap[groupVersion.Version] {
 		storage[strings.ToLower(k)] = v
 	}
-	version, err := s.newAPIGroupVersion(apiGroupInfo.GroupMeta, groupVersion)
+	version, err := s.newAPIGroupVersion(apiGroupInfo, groupVersion)
 	version.Root = apiPrefix
 	version.Storage = storage
-	version.ParameterCodec = apiGroupInfo.ParameterCodec
-	version.Serializer = apiGroupInfo.NegotiatedSerializer
-	version.Creater = apiGroupInfo.Scheme
-	version.Convertor = apiGroupInfo.Scheme
-	version.Copier = apiGroupInfo.Scheme
-	version.Typer = apiGroupInfo.Scheme
-	version.SubresourceGroupVersionKind = apiGroupInfo.SubresourceGroupVersionKind
 	return version, err
 }
 
-func (s *GenericAPIServer) newAPIGroupVersion(groupMeta apimachinery.GroupMeta, groupVersion unversioned.GroupVersion) (*apiserver.APIGroupVersion, error) {
+func (s *GenericAPIServer) newAPIGroupVersion(apiGroupInfo *APIGroupInfo, groupVersion unversioned.GroupVersion) (*apiserver.APIGroupVersion, error) {
 	return &apiserver.APIGroupVersion{
 		RequestInfoResolver: s.NewRequestInfoResolver(),
 
 		GroupVersion: groupVersion,
-		Linker:       groupMeta.SelfLinker,
-		Mapper:       groupMeta.RESTMapper,
 
-		Admit:   s.AdmissionControl,
-		Context: s.RequestContextMapper,
+		ParameterCodec: apiGroupInfo.ParameterCodec,
+		Serializer:     apiGroupInfo.NegotiatedSerializer,
+		Creater:        apiGroupInfo.Scheme,
+		Convertor:      apiGroupInfo.Scheme,
+		Copier:         apiGroupInfo.Scheme,
+		Typer:          apiGroupInfo.Scheme,
+		SubresourceGroupVersionKind: apiGroupInfo.SubresourceGroupVersionKind,
+		Linker: apiGroupInfo.GroupMeta.SelfLinker,
+		Mapper: apiGroupInfo.GroupMeta.RESTMapper,
 
+		Admit:             s.AdmissionControl,
+		Context:           s.RequestContextMapper,
 		MinRequestTimeout: s.MinRequestTimeout,
 	}, nil
 }
@@ -917,4 +919,19 @@ func (s *GenericAPIServer) InstallSwaggerAPI() {
 		},
 	}
 	swagger.RegisterSwaggerService(swaggerConfig, s.HandlerContainer)
+}
+
+// NewDefaultAPIGroupInfo returns an APIGroupInfo stubbed with "normal" values
+// exposed for easier composition from other packages
+func NewDefaultAPIGroupInfo(group string) APIGroupInfo {
+	groupMeta := registered.GroupOrDie(group)
+
+	return APIGroupInfo{
+		GroupMeta:                    *groupMeta,
+		VersionedResourcesStorageMap: map[string]map[string]rest.Storage{},
+		OptionsExternalVersion:       &registered.GroupOrDie(api.GroupName).GroupVersion,
+		Scheme:                       api.Scheme,
+		ParameterCodec:               api.ParameterCodec,
+		NegotiatedSerializer:         api.Codecs,
+	}
 }

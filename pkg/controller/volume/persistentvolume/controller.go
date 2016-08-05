@@ -33,21 +33,56 @@ import (
 	"github.com/golang/glog"
 )
 
+// ==================================================================
+// PLEASE DO NOT ATTEMPT TO SIMPLIFY THIS CODE.
+// KEEP THE SPACE SHUTTLE FLYING.
+// ==================================================================
+//
+// This controller is intentionally written in a very verbose style.  You will
+// notice:
+//
+// 1.  Every 'if' statement has a matching 'else' (exception: simple error
+//     checks for a client API call)
+// 2.  Things that may seem obvious are commented explicitly
+//
+// We call this style 'space shuttle style'.  Space shuttle style is meant to
+// ensure that every branch and condition is considered and accounted for -
+// the same way code is written at NASA for applications like the space
+// shuttle.
+//
+// Originally, the work of this controller was split amongst three
+// controllers.  This controller is the result a large effort to simplify the
+// PV subsystem.  During that effort, it became clear that we needed to ensure
+// that every single condition was handled and accounted for in the code, even
+// if it resulted in no-op code branches.
+//
+// As a result, the controller code may seem overly verbose, commented, and
+// 'branchy'.  However, a large amount of business knowledge and context is
+// recorded here in order to ensure that future maintainers can correctly
+// reason through the complexities of the binding behavior.  For that reason,
+// changes to this file should preserve and add to the space shuttle style.
+//
+// ==================================================================
+// PLEASE DO NOT ATTEMPT TO SIMPLIFY THIS CODE.
+// KEEP THE SPACE SHUTTLE FLYING.
+// ==================================================================
+
 // Design:
 //
 // The fundamental key to this design is the bi-directional "pointer" between
 // PersistentVolumes (PVs) and PersistentVolumeClaims (PVCs), which is
-// represented here as pvc.Spec.VolumeName and pv.Spec.ClaimRef. The bi-directionality
-// is complicated to manage in a transactionless system, but without it we
-// can't ensure sane behavior in the face of different forms of trouble.  For
-// example, a rogue HA controller instance could end up racing and making
-// multiple bindings that are indistinguishable, resulting in potential data
-// loss.
+// represented here as pvc.Spec.VolumeName and pv.Spec.ClaimRef. The bi-
+// directionality is complicated to manage in a transactionless system, but
+// without it we can't ensure sane behavior in the face of different forms of
+// trouble.  For example, a rogue HA controller instance could end up racing
+// and making multiple bindings that are indistinguishable, resulting in
+// potential data loss.
 //
-// This controller is designed to work in active-passive high availability mode.
-// It *could* work also in active-active HA mode, all the object transitions are
-// designed to cope with this, however performance could be lower as these two
-// active controllers will step on each other toes frequently.
+// This controller is designed to work in active-passive high availability
+// mode. It *could* work also in active-active HA mode, all the object
+// transitions are designed to cope with this, however performance could be
+// lower as these two active controllers will step on each other toes
+// frequently.
 //
 // This controller supports pre-bound (by the creator) objects in both
 // directions: a PVC that wants a specific PV or a PV that is reserved for a
@@ -55,10 +90,10 @@ import (
 //
 // The binding is two-step process. PV.Spec.ClaimRef is modified first and
 // PVC.Spec.VolumeName second. At any point of this transaction, the PV or PVC
-// can be modified by user or other controller or completelly deleted. Also, two
-// (or more) controllers may try to bind different volumes to different claims
-// at the same time. The controller must recover from any conflicts that may
-// arise from these conditions.
+// can be modified by user or other controller or completelly deleted. Also,
+// two (or more) controllers may try to bind different volumes to different
+// claims at the same time. The controller must recover from any conflicts
+// that may arise from these conditions.
 
 // annBindCompleted annotation applies to PVCs. It indicates that the lifecycle
 // of the PVC has passed through the initial setup. This information changes how
@@ -150,8 +185,9 @@ func (ctrl *PersistentVolumeController) syncClaim(claim *api.PersistentVolumeCla
 
 	if !hasAnnotation(claim.ObjectMeta, annBindCompleted) {
 		return ctrl.syncUnboundClaim(claim)
+	} else {
+		return ctrl.syncBoundClaim(claim)
 	}
-	return ctrl.syncBoundClaim(claim)
 }
 
 // syncUnboundClaim is the main controller method to decide what to do with an
@@ -167,86 +203,98 @@ func (ctrl *PersistentVolumeController) syncUnboundClaim(claim *api.PersistentVo
 			glog.V(2).Infof("synchronizing unbound PersistentVolumeClaim[%s]: Error finding PV for claim: %v", claimToClaimKey(claim), err)
 			return fmt.Errorf("Error finding PV for claim %q: %v", claimToClaimKey(claim), err)
 		}
-
-		if volume != nil {
+		if volume == nil {
+			glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: no volume found", claimToClaimKey(claim))
+			// No PV could be found
+			// OBSERVATION: pvc is "Pending", will retry
+			if hasAnnotation(claim.ObjectMeta, annClass) {
+				if err = ctrl.provisionClaim(claim); err != nil {
+					return err
+				}
+				return nil
+			}
+			// Mark the claim as Pending and try to find a match in the next
+			// periodic syncClaim
+			if _, err = ctrl.updateClaimPhase(claim, api.ClaimPending); err != nil {
+				return err
+			}
+			return nil
+		} else /* pv != nil */ {
 			// Found a PV for this claim
 			// OBSERVATION: pvc is "Pending", pv is "Available"
 			glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume %q found: %s", claimToClaimKey(claim), volume.Name, getVolumeStatusForLogging(volume))
-
-			// On any error saving the volume or the claim, subsequent
-			// syncClaim will finish the binding.
-			// OBSERVATION: claim is "Bound", pv is "Bound" when no error
-			return ctrl.bind(volume, claim)
+			if err = ctrl.bind(volume, claim); err != nil {
+				// On any error saving the volume or the claim, subsequent
+				// syncClaim will finish the binding.
+				return err
+			}
+			// OBSERVATION: claim is "Bound", pv is "Bound"
+			return nil
 		}
-
-		glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: no volume found", claimToClaimKey(claim))
-		// No PV could be found
-		// OBSERVATION: pvc is "Pending", will retry
-		if hasAnnotation(claim.ObjectMeta, annClass) {
-			return ctrl.provisionClaim(claim)
+	} else /* pvc.Spec.VolumeName != nil */ {
+		// [Unit test set 2]
+		// User asked for a specific PV.
+		glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume %q requested", claimToClaimKey(claim), claim.Spec.VolumeName)
+		obj, found, err := ctrl.volumes.store.GetByKey(claim.Spec.VolumeName)
+		if err != nil {
+			return err
 		}
-		// Mark the claim as Pending and try to find a match in the next periodic syncClaim
-		_, err = ctrl.updateClaimPhase(claim, api.ClaimPending)
-		return err
+		if !found {
+			// User asked for a PV that does not exist.
+			// OBSERVATION: pvc is "Pending"
+			// Retry later.
+			glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume %q requested and not found, will try again next time", claimToClaimKey(claim), claim.Spec.VolumeName)
+			if _, err = ctrl.updateClaimPhase(claim, api.ClaimPending); err != nil {
+				return err
+			}
+			return nil
+		} else {
+			volume, ok := obj.(*api.PersistentVolume)
+			if !ok {
+				return fmt.Errorf("Cannot convert object from volume cache to volume %q!?: %+v", claim.Spec.VolumeName, obj)
+			}
+			glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume %q requested and found: %s", claimToClaimKey(claim), claim.Spec.VolumeName, getVolumeStatusForLogging(volume))
+			if volume.Spec.ClaimRef == nil {
+				// User asked for a PV that is not claimed
+				// OBSERVATION: pvc is "Pending", pv is "Available"
+				glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume is unbound, binding", claimToClaimKey(claim))
+				if err = ctrl.bind(volume, claim); err != nil {
+					// On any error saving the volume or the claim, subsequent
+					// syncClaim will finish the binding.
+					return err
+				}
+				// OBSERVATION: pvc is "Bound", pv is "Bound"
+				return nil
+			} else if isVolumeBoundToClaim(volume, claim) {
+				// User asked for a PV that is claimed by this PVC
+				// OBSERVATION: pvc is "Pending", pv is "Bound"
+				glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume already bound, finishing the binding", claimToClaimKey(claim))
+
+				// Finish the volume binding by adding claim UID.
+				if err = ctrl.bind(volume, claim); err != nil {
+					return err
+				}
+				// OBSERVATION: pvc is "Bound", pv is "Bound"
+				return nil
+			} else {
+				// User asked for a PV that is claimed by someone else
+				// OBSERVATION: pvc is "Pending", pv is "Bound"
+				if !hasAnnotation(claim.ObjectMeta, annBoundByController) {
+					glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume already bound to different claim by user, will retry later", claimToClaimKey(claim))
+					// User asked for a specific PV, retry later
+					if _, err = ctrl.updateClaimPhase(claim, api.ClaimPending); err != nil {
+						return err
+					}
+					return nil
+				} else {
+					// This should never happen because someone had to remove
+					// annBindCompleted annotation on the claim.
+					glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume already bound to different claim %q by controller, THIS SHOULD NEVER HAPPEN", claimToClaimKey(claim), claimrefToClaimKey(volume.Spec.ClaimRef))
+					return fmt.Errorf("Invalid binding of claim %q to volume %q: volume already claimed by %q", claimToClaimKey(claim), claim.Spec.VolumeName, claimrefToClaimKey(volume.Spec.ClaimRef))
+				}
+			}
+		}
 	}
-
-	/* pvc.Spec.VolumeName != nil */
-	// [Unit test set 2]
-	// User asked for a specific PV.
-	glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume %q requested", claimToClaimKey(claim), claim.Spec.VolumeName)
-	obj, found, err := ctrl.volumes.store.GetByKey(claim.Spec.VolumeName)
-	if err != nil {
-		return err
-	}
-	if !found {
-		// User asked for a PV that does not exist.
-		// OBSERVATION: pvc is "Pending"
-		// Retry later.
-		glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume %q requested and not found, will try again next time", claimToClaimKey(claim), claim.Spec.VolumeName)
-		_, err = ctrl.updateClaimPhase(claim, api.ClaimPending)
-		return err
-	}
-
-	volume, ok := obj.(*api.PersistentVolume)
-	if !ok {
-		return fmt.Errorf("Cannot convert object from volume cache to volume %q!?: %+v", claim.Spec.VolumeName, obj)
-	}
-	glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume %q requested and found: %s", claimToClaimKey(claim), claim.Spec.VolumeName, getVolumeStatusForLogging(volume))
-
-	if volume.Spec.ClaimRef == nil {
-		// User asked for a PV that is not claimed
-		// OBSERVATION: pvc is "Pending", pv is "Available"
-		glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume is unbound, binding", claimToClaimKey(claim))
-
-		// On any error saving the volume or the claim, subsequent
-		// syncClaim will finish the binding.
-		// OBSERVATION: pvc is "Bound", pv is "Bound" when no error
-		return ctrl.bind(volume, claim)
-	}
-
-	if isVolumeBoundToClaim(volume, claim) {
-		// User asked for a PV that is claimed by this PVC
-		// OBSERVATION: pvc is "Pending", pv is "Bound"
-		glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume already bound, finishing the binding", claimToClaimKey(claim))
-
-		// Finish the volume binding by adding claim UID.
-		// OBSERVATION: pvc is "Bound", pv is "Bound" when no error
-		return ctrl.bind(volume, claim)
-	}
-
-	// User asked for a PV that is claimed by someone else
-	// OBSERVATION: pvc is "Pending", pv is "Bound"
-	if !hasAnnotation(claim.ObjectMeta, annBoundByController) {
-		glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume already bound to different claim by user, will retry later", claimToClaimKey(claim))
-		// User asked for a specific PV, retry later
-		_, err = ctrl.updateClaimPhase(claim, api.ClaimPending)
-		return err
-	}
-
-	// This should never happen because someone had to remove
-	// annBindCompleted annotation on the claim.
-	glog.V(4).Infof("synchronizing unbound PersistentVolumeClaim[%s]: volume already bound to different claim %q by controller, THIS SHOULD NEVER HAPPEN", claimToClaimKey(claim), claimrefToClaimKey(volume.Spec.ClaimRef))
-	return fmt.Errorf("Invalid binding of claim %q to volume %q: volume already claimed by %q", claimToClaimKey(claim), claim.Spec.VolumeName, claimrefToClaimKey(volume.Spec.ClaimRef))
 }
 
 // syncBoundClaim is the main controller method to decide what to do with a
@@ -276,7 +324,7 @@ func (ctrl *PersistentVolumeController) syncBoundClaim(claim *api.PersistentVolu
 	} else {
 		volume, ok := obj.(*api.PersistentVolume)
 		if !ok {
-			return fmt.Errorf("Cannot convert object from volume cache to volume %q!?: %+v", claim.Spec.VolumeName, obj)
+			return fmt.Errorf("Cannot convert object from volume cache to volume %q!?: %#v", claim.Spec.VolumeName, obj)
 		}
 
 		glog.V(4).Infof("synchronizing bound PersistentVolumeClaim[%s]: volume %q found: %s", claimToClaimKey(claim), claim.Spec.VolumeName, getVolumeStatusForLogging(volume))
@@ -359,7 +407,7 @@ func (ctrl *PersistentVolumeController) syncVolume(volume *api.PersistentVolume)
 			var ok bool
 			claim, ok = obj.(*api.PersistentVolumeClaim)
 			if !ok {
-				return fmt.Errorf("Cannot convert object from volume cache to volume %q!?: %+v", claim.Spec.VolumeName, obj)
+				return fmt.Errorf("Cannot convert object from volume cache to volume %q!?: %#v", claim.Spec.VolumeName, obj)
 			}
 			glog.V(4).Infof("synchronizing PersistentVolume[%s]: claim %s found: %s", volume.Name, claimrefToClaimKey(volume.Spec.ClaimRef), getClaimStatusForLogging(claim))
 		}
@@ -843,7 +891,7 @@ func (ctrl *PersistentVolumeController) reclaimVolume(volume *api.PersistentVolu
 func (ctrl *PersistentVolumeController) recycleVolumeOperation(arg interface{}) {
 	volume, ok := arg.(*api.PersistentVolume)
 	if !ok {
-		glog.Errorf("Cannot convert recycleVolumeOperation argument to volume, got %+v", arg)
+		glog.Errorf("Cannot convert recycleVolumeOperation argument to volume, got %#v", arg)
 		return
 	}
 	glog.V(4).Infof("recycleVolumeOperation [%s] started", volume.Name)
@@ -931,7 +979,7 @@ func (ctrl *PersistentVolumeController) recycleVolumeOperation(arg interface{}) 
 func (ctrl *PersistentVolumeController) deleteVolumeOperation(arg interface{}) {
 	volume, ok := arg.(*api.PersistentVolume)
 	if !ok {
-		glog.Errorf("Cannot convert deleteVolumeOperation argument to volume, got %+v", arg)
+		glog.Errorf("Cannot convert deleteVolumeOperation argument to volume, got %#v", arg)
 		return
 	}
 	glog.V(4).Infof("deleteVolumeOperation [%s] started", volume.Name)
@@ -1009,7 +1057,7 @@ func (ctrl *PersistentVolumeController) isVolumeReleased(volume *api.PersistentV
 		var ok bool
 		claim, ok = obj.(*api.PersistentVolumeClaim)
 		if !ok {
-			return false, fmt.Errorf("Cannot convert object from claim cache to claim!?: %+v", obj)
+			return false, fmt.Errorf("Cannot convert object from claim cache to claim!?: %#v", obj)
 		}
 	}
 	if claim != nil && claim.UID == volume.Spec.ClaimRef.UID {
@@ -1069,7 +1117,7 @@ func (ctrl *PersistentVolumeController) provisionClaim(claim *api.PersistentVolu
 func (ctrl *PersistentVolumeController) provisionClaimOperation(claimObj interface{}) {
 	claim, ok := claimObj.(*api.PersistentVolumeClaim)
 	if !ok {
-		glog.Errorf("Cannot convert provisionClaimOperation argument to claim, got %+v", claimObj)
+		glog.Errorf("Cannot convert provisionClaimOperation argument to claim, got %#v", claimObj)
 		return
 	}
 	glog.V(4).Infof("provisionClaimOperation [%s] started", claimToClaimKey(claim))

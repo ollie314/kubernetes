@@ -20,6 +20,7 @@ package e2e_node
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -27,23 +28,49 @@ import (
 	"os"
 	"os/exec"
 	"path"
-	"strings"
 	"testing"
 	"time"
 
+	"k8s.io/kubernetes/pkg/api"
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	"k8s.io/kubernetes/pkg/client/restclient"
+	"k8s.io/kubernetes/pkg/client/typed/dynamic"
+	namespacecontroller "k8s.io/kubernetes/pkg/controller/namespace"
+	"k8s.io/kubernetes/pkg/util/wait"
 	commontest "k8s.io/kubernetes/test/e2e/common"
 	"k8s.io/kubernetes/test/e2e/framework"
 
 	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo/config"
 	more_reporters "github.com/onsi/ginkgo/reporters"
 	. "github.com/onsi/gomega"
 )
 
 var e2es *e2eService
 
+// context is the test context shared by all parallel nodes.
+// Originally we setup the test environment and initialize global variables
+// in BeforeSuite, and then used the global variables in the test.
+// However, after we make the test parallel, ginkgo will run all tests
+// in several parallel test nodes. And for each test node, the BeforeSuite
+// and AfterSuite will be run.
+// We don't want to start services (kubelet, apiserver and etcd) for all
+// parallel nodes, but we do want to set some globally shared variable which
+// could be used in test.
+// We have to use SynchronizedBeforeSuite to achieve that. The first
+// function of SynchronizedBeforeSuite is only called once, and the second
+// function is called in each parallel test node. The result returned by
+// the first function will be the parameter of the second function.
+// So we'll start all services and initialize the shared context in the first
+// function, and propagate the context to all parallel test nodes in the
+// second function.
+// Notice no lock is needed for shared context, because context should only be
+// initialized in the first function in SynchronizedBeforeSuite. After that
+// it should never be modified.
+var context SharedContext
+
 var prePullImages = flag.Bool("prepull-images", true, "If true, prepull images so image pull failures do not cause test failures.")
-var junitFileNumber = flag.Int("junit-file-number", 1, "Used to create junit filename - e.g. junit_01.xml.")
 
 func init() {
 	framework.RegisterCommonFlags()
@@ -62,7 +89,7 @@ func TestE2eNode(t *testing.T) {
 			glog.Errorf("Failed creating report directory: %v", err)
 		} else {
 			// Configure a junit reporter to write to the directory
-			junitFile := fmt.Sprintf("junit_%02d.xml", *junitFileNumber)
+			junitFile := fmt.Sprintf("junit_%s%02d.xml", framework.TestContext.ReportPrefix, config.GinkgoConfig.ParallelNode)
 			junitPath := path.Join(*reportDir, junitFile)
 			reporters = append(reporters, more_reporters.NewJUnitReporter(junitPath))
 		}
@@ -71,16 +98,16 @@ func TestE2eNode(t *testing.T) {
 }
 
 // Setup the kubelet on the node
-var _ = BeforeSuite(func() {
+var _ = SynchronizedBeforeSuite(func() []byte {
 	if *buildServices {
 		buildGo()
 	}
 	if framework.TestContext.NodeName == "" {
-		output, err := exec.Command("hostname").CombinedOutput()
+		hostname, err := os.Hostname()
 		if err != nil {
-			glog.Fatalf("Could not get node name from hostname %v.  Output:\n%s", err, output)
+			glog.Fatalf("Could not get node name: %v", err)
 		}
-		framework.TestContext.NodeName = strings.TrimSpace(fmt.Sprintf("%s", output))
+		framework.TestContext.NodeName = hostname
 	}
 
 	// Pre-pull the images tests depend on so we can fail immediately if there is an image pull issue
@@ -96,8 +123,9 @@ var _ = BeforeSuite(func() {
 	// We should mask locksmithd when provisioning the machine.
 	maskLocksmithdOnCoreos()
 
+	shared := &SharedContext{}
 	if *startServices {
-		e2es = newE2eService(framework.TestContext.NodeName, framework.TestContext.CgroupsPerQOS)
+		e2es = newE2eService(framework.TestContext.NodeName, framework.TestContext.CgroupsPerQOS, shared)
 		if err := e2es.start(); err != nil {
 			Fail(fmt.Sprintf("Unable to start node services.\n%v", err))
 		}
@@ -106,12 +134,29 @@ var _ = BeforeSuite(func() {
 		glog.Infof("Running tests without starting services.")
 	}
 
+	glog.Infof("Starting namespace controller")
+	startNamespaceController()
+
 	// Reference common test to make the import valid.
 	commontest.CurrentSuite = commontest.NodeE2E
+
+	// Share the node name with the other test nodes.
+	shared.NodeName = framework.TestContext.NodeName
+	data, err := json.Marshal(shared)
+	Expect(err).NotTo(HaveOccurred())
+
+	return data
+}, func(data []byte) {
+	// Set the shared context got from the synchronized initialize function
+	shared := &SharedContext{}
+	Expect(json.Unmarshal(data, shared)).To(Succeed())
+	context = *shared
+
+	framework.TestContext.NodeName = shared.NodeName
 })
 
 // Tear down the kubelet on the node
-var _ = AfterSuite(func() {
+var _ = SynchronizedAfterSuite(func() {}, func() {
 	if e2es != nil {
 		e2es.getLogFiles()
 		if *startServices && *stopServices {
@@ -126,7 +171,9 @@ var _ = AfterSuite(func() {
 func maskLocksmithdOnCoreos() {
 	data, err := ioutil.ReadFile("/etc/os-release")
 	if err != nil {
-		glog.Fatalf("Could not read /etc/os-release: %v", err)
+		// Not all distros contain this file.
+		glog.Infof("Could not read /etc/os-release: %v", err)
+		return
 	}
 	if bytes.Contains(data, []byte("ID=coreos")) {
 		if output, err := exec.Command("sudo", "systemctl", "mask", "--now", "locksmithd").CombinedOutput(); err != nil {
@@ -134,4 +181,23 @@ func maskLocksmithdOnCoreos() {
 		}
 		glog.Infof("Locksmithd is masked successfully")
 	}
+}
+
+const (
+	// ncResyncPeriod is resync period of the namespace controller
+	ncResyncPeriod = 5 * time.Minute
+	// ncConcurrency is concurrency of the namespace controller
+	ncConcurrency = 2
+)
+
+func startNamespaceController() {
+	// Use the default QPS
+	config := restclient.AddUserAgent(&restclient.Config{Host: framework.TestContext.Host}, "node-e2e-namespace-controller")
+	client, err := clientset.NewForConfig(config)
+	Expect(err).NotTo(HaveOccurred())
+	clientPool := dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
+	resources, err := client.Discovery().ServerPreferredNamespacedResources()
+	Expect(err).NotTo(HaveOccurred())
+	nc := namespacecontroller.NewNamespaceController(client, clientPool, resources, ncResyncPeriod, api.FinalizerKubernetes)
+	go nc.Run(ncConcurrency, wait.NeverStop)
 }

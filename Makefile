@@ -14,7 +14,7 @@
 
 DBG_MAKEFILE ?=
 ifeq ($(DBG_MAKEFILE),1)
-    $(warning ***** starting makefile for goal(s) "$(MAKECMDGOALS)")
+    $(warning ***** starting Makefile for goal(s) "$(MAKECMDGOALS)")
     $(warning ***** $(shell date))
 else
     # If we're not debugging the Makefile, don't echo recipes.
@@ -29,38 +29,32 @@ endif
 #   test: Run tests.
 #   clean: Clean up.
 
-# It's necessary to set this because some docker images don't make sh -> bash.
+# It's necessary to set this because some environments don't link sh -> bash.
 SHELL := /bin/bash
 
 # We don't need make's built-in rules.
 MAKEFLAGS += --no-builtin-rules
 .SUFFIXES:
 
-# We want make to yell at us if we use undefined variables.
-MAKEFLAGS += --warn-undefined-variables
-
 # Constants used throughout.
+.EXPORT_ALL_VARIABLES:
 OUT_DIR ?= _output
 BIN_DIR := $(OUT_DIR)/bin
 PRJ_SRC_PATH := k8s.io/kubernetes
+GENERATED_FILE_PREFIX := zz_generated.
 
 # Metadata for driving the build lives here.
 META_DIR := .make
 
-#
-# Define variables that we use as inputs so we can warn about undefined variables.
-#
+KUBE_GOFLAGS := $(GOFLAGS)
+KUBE_GOLDFLAGS := $(GOLDFLAGS)
 
-WHAT ?=
-TESTS ?=
+KUBE_VERBOSE ?= 1
 
-GOFLAGS ?=
-KUBE_GOFLAGS = $(GOFLAGS)
-export KUBE_GOFLAGS GOFLAGS
-
-GOLDFLAGS ?=
-KUBE_GOLDFLAGS = $(GOLDFLAGS)
-export KUBE_GOLDFLAGS GOLDFLAGS
+GOGCFLAGS ?=
+BRANCH ?=
+KUBE_GOGCFLAGS = $(GOGCFLAGS)
+export KUBE_GOGCFLAGS GOGCFLAGS
 
 # Build code.
 #
@@ -69,12 +63,17 @@ export KUBE_GOLDFLAGS GOLDFLAGS
 #     package, the build will produce executable files under $(OUT_DIR)/go/bin.
 #     If not specified, "everything" will be built.
 #   GOFLAGS: Extra flags to pass to 'go' when building.
-#   GOLDFLAGS: Extra linking flags to pass to 'go' when building.
+#   GOLDFLAGS: Extra linking flags passed to 'go' when building.
+#   GOGCFLAGS: Additional go compile flags passed to 'go' when building.
 #
 # Example:
 #   make
 #   make all
 #   make all WHAT=cmd/kubelet GOFLAGS=-v
+#   make all GOGCFLAGS="-N -l"
+#     Note: Use the -N -l options to disable compiler optimizations an inlining.
+#           Using these build options allows you to subsequently use source
+#           debugging tools like delve.
 .PHONY: all
 all: generated_files
 	hack/make-rules/build.sh $(WHAT)
@@ -83,14 +82,14 @@ all: generated_files
 #
 # Example:
 # make ginkgo
+.PHONY: ginkgo
 ginkgo:
 	hack/make-rules/build.sh vendor/github.com/onsi/ginkgo/ginkgo
-.PHONY: ginkgo
 
 # Runs all the presubmission verifications.
 #
 # Args:
-#   BRANCH: Branch to be passed to hack/verify-godeps.sh script.
+#   BRANCH: Branch to be passed to verify-godeps.sh script.
 #
 # Example:
 #   make verify
@@ -98,6 +97,7 @@ ginkgo:
 .PHONY: verify
 verify:
 	KUBE_VERIFY_GIT_BRANCH=$(BRANCH) hack/make-rules/verify.sh -v
+	hack/make-rules/vet.sh
 
 # Build and run tests.
 #
@@ -107,6 +107,7 @@ verify:
 #   TESTS: Same as WHAT.
 #   GOFLAGS: Extra flags to pass to 'go' when building.
 #   GOLDFLAGS: Extra linking flags to pass to 'go' when building.
+#   GOGCFLAGS: Additional go compile flags passed to 'go' when building.
 #
 # Example:
 #   make check
@@ -160,9 +161,10 @@ test-e2e: ginkgo generated_files
 #  IMAGES.  Defaults to "kubernetes-node-e2e-images".
 #  INSTANCE_PREFIX: For REMOTE=true only.  Instances created from images will
 #    have the name "${INSTANCE_PREFIX}-${IMAGE_NAME}".  Defaults to "test".
+#  INSTANCE_METADATA: For REMOTE=true and running on GCE only.
 #
 # Example:
-#   make test-e2e-node FOCUS=kubelet SKIP=container
+#   make test-e2e-node FOCUS=Kubelet SKIP=container
 #   make test-e2e-node REMOTE=true DELETE_INSTANCES=true
 #   make test-e2e-node TEST_ARGS="--cgroups-per-qos=true"
 # Build and run tests.
@@ -174,9 +176,9 @@ test-e2e-node: ginkgo generated_files
 #
 # Example:
 #   make test-cmd
-test-cmd:
-	@hack/make-rules/test-cmd.sh
 .PHONY: test-cmd
+test-cmd: generated_files
+	hack/make-rules/test-cmd.sh
 
 # Remove all build artifacts.
 #
@@ -198,6 +200,14 @@ clean: clean_meta
 clean_meta:
 	rm -rf $(META_DIR)
 
+# Remove all auto-generated artifacts.
+#
+# Example:
+#   make clean_generated
+.PHONY: clean_generated
+clean_generated:
+	find . -type f -name $(GENERATED_FILE_PREFIX)\* | xargs rm -f
+
 # Run 'go vet'.
 #
 # Args:
@@ -217,7 +227,7 @@ vet:
 # Example:
 #   make release
 .PHONY: release
-release: generated_files
+release:
 	build/release.sh
 
 # Build a release, but skip tests
@@ -225,7 +235,7 @@ release: generated_files
 # Example:
 #   make release-skip-tests
 .PHONY: release-skip-tests quick-release
-release-skip-tests quick-release: generated_files
+release-skip-tests quick-release:
 	KUBE_RELEASE_RUN_TESTS=n KUBE_FASTBUILD=true build/release.sh
 
 # Cross-compile for all platforms
@@ -244,5 +254,26 @@ cross:
 $(notdir $(abspath $(wildcard cmd/*/))): generated_files
 	hack/make-rules/build.sh cmd/$@
 
-# Include logic for generated files.
-include Makefile.generated_files
+# Add rules for all directories in plugin/cmd/
+#
+# Example:
+#   make kube-scheduler
+.PHONY: $(notdir $(abspath $(wildcard plugin/cmd/*/)))
+$(notdir $(abspath $(wildcard plugin/cmd/*/))): generated_files
+	hack/make-rules/build.sh plugin/cmd/$@
+
+# Add rules for all directories in federation/cmd/
+#
+# Example:
+#   make federation-apiserver federation-controller-manager
+.PHONY: $(notdir $(abspath $(wildcard federation/cmd/*/)))
+$(notdir $(abspath $(wildcard federation/cmd/*/))): generated_files
+	hack/make-rules/build.sh federation/cmd/$@
+
+# Produce auto-generated files needed for the build.
+#
+# Example:
+#   make generated_files
+.PHONY: generated_files
+generated_files:
+	$(MAKE) -f Makefile.$@ $@

@@ -279,6 +279,7 @@ func (gc *GarbageCollector) removeOrphanFinalizer(owner *node) error {
 		for _, f := range finalizers {
 			if f == api.FinalizerOrphan {
 				found = true
+				break
 			} else {
 				newFinalizers = append(newFinalizers, f)
 			}
@@ -502,10 +503,11 @@ func monitorFor(p *Propagator, clientPool dynamic.ClientPool, resource unversion
 }
 
 var ignoredResources = map[unversioned.GroupVersionResource]struct{}{
-	unversioned.GroupVersionResource{Group: "extensions", Version: "v1beta1", Resource: "replicationcontrollers"}: {},
-	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "bindings"}:                              {},
-	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "componentstatuses"}:                     {},
-	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "events"}:                                {},
+	unversioned.GroupVersionResource{Group: "extensions", Version: "v1beta1", Resource: "replicationcontrollers"}:  {},
+	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "bindings"}:                               {},
+	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "componentstatuses"}:                      {},
+	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "events"}:                                 {},
+	unversioned.GroupVersionResource{Group: "authentication.k8s.io", Version: "v1beta1", Resource: "tokenreviews"}: {},
 }
 
 func NewGarbageCollector(clientPool dynamic.ClientPool, resources []unversioned.GroupVersionResource) (*GarbageCollector, error) {
@@ -684,9 +686,21 @@ func (gc *GarbageCollector) processItem(item *node) error {
 }
 
 func (gc *GarbageCollector) Run(workers int, stopCh <-chan struct{}) {
+	glog.Infof("Garbage Collector: Initializing")
 	for _, monitor := range gc.monitors {
 		go monitor.controller.Run(stopCh)
 	}
+
+	wait.PollInfinite(10*time.Second, func() (bool, error) {
+		for _, monitor := range gc.monitors {
+			if !monitor.controller.HasSynced() {
+				glog.Infof("Garbage Collector: Waiting for resource monitors to be synced...")
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	glog.Infof("Garbage Collector: All monitored resources synced. Proceeding to collect garbage")
 
 	// worker
 	go wait.Until(gc.propagator.processEvent, 0, stopCh)
@@ -696,7 +710,7 @@ func (gc *GarbageCollector) Run(workers int, stopCh <-chan struct{}) {
 		go wait.Until(gc.orphanFinalizer, 0, stopCh)
 	}
 	<-stopCh
-	glog.Infof("Shutting down garbage collector")
+	glog.Infof("Garbage Collector: Shutting down")
 	gc.dirtyQueue.ShutDown()
 	gc.orphanQueue.ShutDown()
 	gc.propagator.eventQueue.ShutDown()

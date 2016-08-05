@@ -82,6 +82,17 @@ function fetch_server_version_tars() {
     unset CLUSTER_API_VERSION
 }
 
+function fetch_gci_version_tars() {
+    if ! [[ "${JENKINS_USE_GCI_VERSION:-}" =~ ^[yY]$ ]]; then
+        echo "JENKINS_USE_GCI_VERSION must be set."
+        exit 1
+    fi
+    local -r gci_k8s_version="$(get_gci_k8s_version)"
+    echo "Using GCI builtin version: ${gci_k8s_version}"
+    fetch_tars_from_gcs "gs://${KUBE_GCS_RELEASE_BUCKET}/release" "${gci_k8s_version}"
+    unpack_binaries
+}
+
 # Use a published version like "ci/latest" (default), "release/latest",
 # "release/latest-1", or "release/stable"
 function fetch_published_version_tars() {
@@ -121,13 +132,6 @@ function unpack_binaries() {
     tar -xzf kubernetes-test.tar.gz
 }
 
-# Get the latest GCI image in a family.
-function get_latest_gci_image() {
-    local -r image_project="$1"
-    local -r image_family="$2"
-    echo "$(gcloud compute images describe-from-family ${image_family} --project=${image_project} --format='value(name)')"
-}
-
 function get_latest_docker_release() {
   # Typical Docker release versions are like v1.11.2-rc1, v1.11.2, and etc.
   local -r version_re='.*\"tag_name\":[[:space:]]+\"v([0-9\.r|c-]+)\",.*'
@@ -162,6 +166,11 @@ function install_google_cloud_sdk_tarball() {
 function dump_cluster_logs_and_exit() {
     local -r exit_status=$?
     dump_cluster_logs
+    if [[ "${USE_KUBEMARK:-}" == "true" ]]; then
+      # If we tried to bring the Kubemark cluster up, make a courtesy
+      # attempt to bring it down so we're not leaving resources around.
+      ./test/kubemark/stop-kubemark.sh || true
+    fi
     if [[ "${E2E_DOWN,,}" == "true" ]]; then
       # If we tried to bring the cluster up, make a courtesy attempt
       # to bring the cluster down so we're not leaving resources
@@ -178,6 +187,37 @@ function dump_cluster_logs_and_exit() {
 function dump_cluster_logs() {
     if [[ -x "cluster/log-dump.sh"  ]]; then
         ./cluster/log-dump.sh "${ARTIFACTS}"
+    fi
+}
+
+# Figures out the builtin k8s version of a GCI image.
+function get_gci_k8s_version() {
+    local -r image_description=$(gcloud compute images describe ${KUBE_GCE_MASTER_IMAGE} --project=${KUBE_GCE_MASTER_PROJECT})
+    # Staged GCI images all include versions in their image descriptions so we
+    # extract builtin Kubernetes version from them.
+    local -r k8s_version_re='.*Kubernetes: ([0-9a-z.-]+),.*'
+    if [[ ${image_description} =~ ${k8s_version_re} ]]; then
+        local -r gci_k8s_version="v${BASH_REMATCH[1]}"
+    else
+        echo "Failed to determine builtin k8s version for image ${image_name}: ${image_description}"
+        exit 1
+    fi
+    echo "${gci_k8s_version}"
+}
+
+# GCI specific settings.
+# Assumes: JENKINS_GCI_IMAGE_FAMILY
+function setup_gci_vars() {
+    local -r gci_staging_project=container-vm-image-staging
+    local -r image_name="$(gcloud compute images describe-from-family ${JENKINS_GCI_IMAGE_FAMILY} --project=${gci_staging_project} --format='value(name)')"
+
+    export KUBE_GCE_MASTER_PROJECT="${gci_staging_project}"
+    export KUBE_GCE_MASTER_IMAGE="${image_name}"
+    export KUBE_MASTER_OS_DISTRIBUTION="gci"
+    if [[ "${JENKINS_GCI_IMAGE_FAMILY}" == "gci-canary-test" ]]; then
+        # The family "gci-canary-test" is reserved for a special type of GCI images
+        # that are used to continuously validate Docker releases.
+        export KUBE_GCI_DOCKER_VERSION="$(get_latest_docker_release)"
     fi
 }
 
@@ -210,22 +250,16 @@ if [[ -n "${CLOUDSDK_BUCKET:-}" ]]; then
     export CLOUDSDK_CONFIG=/var/lib/jenkins/.config/gcloud
 fi
 
-# We get the image project and name for GCI dynamically.
+# GCI specific settings.
 if [[ -n "${JENKINS_GCI_IMAGE_FAMILY:-}" ]]; then
-  GCI_STAGING_PROJECT=container-vm-image-staging
-  export KUBE_GCE_MASTER_PROJECT="${GCI_STAGING_PROJECT}"
-  export KUBE_GCE_MASTER_IMAGE="$(get_latest_gci_image "${GCI_STAGING_PROJECT}" "${JENKINS_GCI_IMAGE_FAMILY}")"
-  export KUBE_MASTER_OS_DISTRIBUTION="gci"
-  if [[ "${JENKINS_GCI_IMAGE_FAMILY}" == "gci-canary-test" ]]; then
-    # The family "gci-canary-test" is reserved for a special type of GCI images
-    # that are used to continuously validate Docker releases.
-    export KUBE_GCI_DOCKER_VERSION="$(get_latest_docker_release)"
-  fi
+  setup_gci_vars
 fi
 
 if [[ -f "${KUBEKINS_SERVICE_ACCOUNT_FILE:-}" ]]; then
   echo 'Activating service account...'  # No harm in doing this multiple times.
   gcloud auth activate-service-account --key-file="${KUBEKINS_SERVICE_ACCOUNT_FILE}"
+  # https://developers.google.com/identity/protocols/application-default-credentials
+  export GOOGLE_APPLICATION_CREDENTIALS="${KUBEKINS_SERVICE_ACCOUNT_FILE}"
   unset KUBEKINS_SERVICE_ACCOUNT_FILE
 elif [[ -n "${KUBEKINS_SERVICE_ACCOUNT_FILE:-}" ]]; then
   echo "ERROR: cannot access service account file at: ${KUBEKINS_SERVICE_ACCOUNT_FILE}"
@@ -272,6 +306,9 @@ elif [[ "${JENKINS_USE_SERVER_VERSION:-}" =~ ^[yY]$ ]]; then
     # test what's running in GKE by default rather than some CI build.
     clean_binaries
     fetch_server_version_tars
+elif [[ "${JENKINS_USE_GCI_VERSION:-}" =~ ^[yY]$ ]]; then
+    clean_binaries
+    fetch_gci_version_tars
 else
     # use JENKINS_PUBLISHED_VERSION, default to 'ci/latest', since that's
     # usually what we're testing.
@@ -411,7 +448,6 @@ if [[ "${USE_KUBEMARK:-}" == "true" ]]; then
   ./test/kubemark/stop-kubemark.sh
   NUM_NODES=${KUBEMARK_NUM_NODES:-$NUM_NODES}
   MASTER_SIZE=${KUBEMARK_MASTER_SIZE:-$MASTER_SIZE}
-  # If start-kubemark fails, we trigger empty set of tests that would trigger storing logs from the base cluster.
   ./test/kubemark/start-kubemark.sh || dump_cluster_logs_and_exit
   # Similarly, if tests fail, we trigger empty set of tests that would trigger storing logs from the base cluster.
   # We intentionally overwrite the exit-code from `run-e2e-tests.sh` because we want jenkins to look at the
@@ -420,7 +456,7 @@ if [[ "${USE_KUBEMARK:-}" == "true" ]]; then
   # exit non-0.
   # TODO: The above comment is no longer accurate. Need to fix this before
   # turning xunit off for the postsubmit tests. See: #28200
-  ./test/kubemark/run-e2e-tests.sh --ginkgo.focus="${KUBEMARK_TESTS:-starting\s30\spods}" "${KUBEMARK_TEST_ARGS:-}" || dump_cluster_logs
+  ./test/kubemark/run-e2e-tests.sh --ginkgo.focus="${KUBEMARK_TESTS:-starting\s30\spods}" "${KUBEMARK_TEST_ARGS:-}" || dump_cluster_logs_and_exit
   ./test/kubemark/stop-kubemark.sh
   NUM_NODES=${NUM_NODES_BKP}
   MASTER_SIZE=${MASTER_SIZE_BKP}

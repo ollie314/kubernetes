@@ -86,8 +86,19 @@ type ImageConfig struct {
 }
 
 type GCEImage struct {
-	Image   string `json:"image"`
-	Project string `json:"project"`
+	Image    string `json:"image"`
+	Project  string `json:"project"`
+	Metadata string `json:"metadata"`
+}
+
+type internalImageConfig struct {
+	images map[string]internalGCEImage
+}
+
+type internalGCEImage struct {
+	image    string
+	project  string
+	metadata *compute.Metadata
 }
 
 func main() {
@@ -102,8 +113,8 @@ func main() {
 	if *hosts == "" && *imageConfigFile == "" && *images == "" {
 		glog.Fatalf("Must specify one of --image-config-file, --hosts, --images.")
 	}
-	gceImages := &ImageConfig{
-		Images: make(map[string]GCEImage),
+	gceImages := &internalImageConfig{
+		images: make(map[string]internalGCEImage),
 	}
 	if *imageConfigFile != "" {
 		// parse images
@@ -111,9 +122,18 @@ func main() {
 		if err != nil {
 			glog.Fatalf("Could not read image config file provided: %v", err)
 		}
-		err = yaml.Unmarshal(imageConfigData, gceImages)
+		externalImageConfig := ImageConfig{Images: make(map[string]GCEImage)}
+		err = yaml.Unmarshal(imageConfigData, &externalImageConfig)
 		if err != nil {
 			glog.Fatalf("Could not parse image config file: %v", err)
+		}
+		for key, imageConfig := range externalImageConfig.Images {
+			gceImage := internalGCEImage{
+				image:    imageConfig.Image,
+				project:  imageConfig.Project,
+				metadata: getImageMetadata(imageConfig.Metadata),
+			}
+			gceImages.images[key] = gceImage
 		}
 	}
 
@@ -125,22 +145,24 @@ func main() {
 		}
 		cliImages := strings.Split(*images, ",")
 		for _, img := range cliImages {
-			gceImages.Images[img] = GCEImage{
-				Image:   img,
-				Project: *imageProject,
+			gceImage := internalGCEImage{
+				image:    img,
+				project:  *imageProject,
+				metadata: getImageMetadata(*instanceMetadata),
 			}
+			gceImages.images[img] = gceImage
 		}
 	}
 
-	if len(gceImages.Images) != 0 && *zone == "" {
+	if len(gceImages.images) != 0 && *zone == "" {
 		glog.Fatal("Must specify --zone flag")
 	}
-	for shortName, image := range gceImages.Images {
-		if image.Project == "" {
+	for shortName, image := range gceImages.images {
+		if image.project == "" {
 			glog.Fatalf("Invalid config for %v; must specify a project", shortName)
 		}
 	}
-	if len(gceImages.Images) != 0 {
+	if len(gceImages.images) != 0 {
 		if *project == "" {
 			glog.Fatal("Must specify --project flag to launch images into")
 		}
@@ -170,20 +192,21 @@ func main() {
 
 	results := make(chan *TestResult)
 	running := 0
-	for shortName, image := range gceImages.Images {
-		running++
+	for shortName := range gceImages.images {
+		imageConfig := gceImages.images[shortName]
 		fmt.Printf("Initializing e2e tests using image %s.\n", shortName)
-		go func(image, imageProject string, junitFileNum int) {
-			results <- testImage(image, imageProject, junitFileNum)
-		}(image.Image, image.Project, running)
+		running++
+		go func(image *internalGCEImage, junitFilePrefix string) {
+			results <- testImage(image, junitFilePrefix)
+		}(&imageConfig, shortName)
 	}
 	if *hosts != "" {
 		for _, host := range strings.Split(*hosts, ",") {
 			fmt.Printf("Initializing e2e tests using host %s.\n", host)
 			running++
-			go func(host string, junitFileNum int) {
-				results <- testHost(host, *cleanup, junitFileNum, *setupNode)
-			}(host, running)
+			go func(host string, junitFilePrefix string) {
+				results <- testHost(host, *cleanup, junitFilePrefix, *setupNode)
+			}(host, host)
 		}
 	}
 
@@ -224,8 +247,27 @@ func (a *Archive) deleteArchive() {
 	os.Remove(path)
 }
 
+func getImageMetadata(input string) *compute.Metadata {
+	if input == "" {
+		return nil
+	}
+	glog.V(3).Infof("parsing instance metadata: %q", input)
+	raw := parseInstanceMetadata(input)
+	glog.V(4).Infof("parsed instance metadata: %v", raw)
+	metadataItems := []*compute.MetadataItems{}
+	for k, v := range raw {
+		val := v
+		metadataItems = append(metadataItems, &compute.MetadataItems{
+			Key:   k,
+			Value: &val,
+		})
+	}
+	ret := compute.Metadata{Items: metadataItems}
+	return &ret
+}
+
 // Run tests in archive against host
-func testHost(host string, deleteFiles bool, junitFileNum int, setupNode bool) *TestResult {
+func testHost(host string, deleteFiles bool, junitFilePrefix string, setupNode bool) *TestResult {
 	instance, err := computeService.Instances.Get(*project, *zone, host).Do()
 	if err != nil {
 		return &TestResult{
@@ -255,7 +297,7 @@ func testHost(host string, deleteFiles bool, junitFileNum int, setupNode bool) *
 		}
 	}
 
-	output, exitOk, err := e2e_node.RunRemote(path, host, deleteFiles, junitFileNum, setupNode, *testArgs)
+	output, exitOk, err := e2e_node.RunRemote(path, host, deleteFiles, junitFilePrefix, setupNode, *testArgs)
 	return &TestResult{
 		output: output,
 		err:    err,
@@ -266,26 +308,26 @@ func testHost(host string, deleteFiles bool, junitFileNum int, setupNode bool) *
 
 // Provision a gce instance using image and run the tests in archive against the instance.
 // Delete the instance afterward.
-func testImage(image, imageProject string, junitFileNum int) *TestResult {
-	host, err := createInstance(image, imageProject)
+func testImage(image *internalGCEImage, junitFilePrefix string) *TestResult {
+	host, err := createInstance(image)
 	if *deleteInstances {
-		defer deleteInstance(image)
+		defer deleteInstance(image.image)
 	}
 	if err != nil {
 		return &TestResult{
-			err: fmt.Errorf("unable to create gce instance with running docker daemon for image %s.  %v", image, err),
+			err: fmt.Errorf("unable to create gce instance with running docker daemon for image %s.  %v", image.image, err),
 		}
 	}
 
 	// Only delete the files if we are keeping the instance and want it cleaned up.
 	// If we are going to delete the instance, don't bother with cleaning up the files
 	deleteFiles := !*deleteInstances && *cleanup
-	return testHost(host, deleteFiles, junitFileNum, *setupNode)
+	return testHost(host, deleteFiles, junitFilePrefix, *setupNode)
 }
 
 // Provision a gce instance using image
-func createInstance(image, imageProject string) (string, error) {
-	name := imageToInstanceName(image)
+func createInstance(image *internalGCEImage) (string, error) {
+	name := imageToInstanceName(image.image)
 	i := &compute.Instance{
 		Name:        name,
 		MachineType: machineType(),
@@ -304,24 +346,12 @@ func createInstance(image, imageProject string) (string, error) {
 				Boot:       true,
 				Type:       "PERSISTENT",
 				InitializeParams: &compute.AttachedDiskInitializeParams{
-					SourceImage: sourceImage(image, imageProject),
+					SourceImage: sourceImage(image.image, image.project),
 				},
 			},
 		},
 	}
-	if *instanceMetadata != "" {
-		raw := parseInstanceMetadata(*instanceMetadata)
-		i.Metadata = &compute.Metadata{}
-		metadata := []*compute.MetadataItems{}
-		for k, v := range raw {
-			val := v
-			metadata = append(metadata, &compute.MetadataItems{
-				Key:   k,
-				Value: &val,
-			})
-		}
-		i.Metadata.Items = metadata
-	}
+	i.Metadata = image.metadata
 	op, err := computeService.Instances.Insert(*project, *zone, i).Do()
 	if err != nil {
 		return "", err
@@ -422,12 +452,12 @@ func parseInstanceMetadata(str string) map[string]string {
 		}
 		kp := strings.Split(s, "<")
 		if len(kp) != 2 {
-			glog.Errorf("Invalid instance metadata: %q", s)
+			glog.Fatalf("Invalid instance metadata: %q", s)
 			continue
 		}
 		v, err := ioutil.ReadFile(kp[1])
 		if err != nil {
-			glog.Errorf("Failed to read metadata file %q: %v", kp[1], err)
+			glog.Fatalf("Failed to read metadata file %q: %v", kp[1], err)
 			continue
 		}
 		metadata[kp[0]] = string(v)

@@ -17,7 +17,6 @@ limitations under the License.
 package e2e
 
 import (
-	"fmt"
 	"strconv"
 	"time"
 
@@ -25,8 +24,8 @@ import (
 	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/intstr"
+	"k8s.io/kubernetes/pkg/util/uuid"
 	"k8s.io/kubernetes/pkg/watch"
 	"k8s.io/kubernetes/test/e2e/framework"
 
@@ -71,7 +70,7 @@ func observePodCreation(w watch.Interface) {
 			framework.Failf("Failed to observe pod creation: %v", event)
 		}
 	case <-time.After(framework.PodStartTimeout):
-		Fail("Timeout while waiting for pod creation")
+		framework.Failf("Timeout while waiting for pod creation")
 	}
 }
 
@@ -91,7 +90,7 @@ func observeObjectDeletion(w watch.Interface) (obj runtime.Object) {
 		}
 	}
 	if !deleted {
-		Fail("Failed to observe pod deletion")
+		framework.Failf("Failed to observe pod deletion")
 	}
 	return
 }
@@ -101,7 +100,7 @@ var _ = framework.KubeDescribe("Generated release_1_2 clientset", func() {
 	It("should create pods, delete pods, watch pods", func() {
 		podClient := f.Clientset_1_2.Core().Pods(f.Namespace.Name)
 		By("constructing the pod")
-		name := "pod" + string(util.NewUUID())
+		name := "pod" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		podCopy := testingPod(name, value)
 		pod := &podCopy
@@ -164,7 +163,7 @@ var _ = framework.KubeDescribe("Generated release_1_2 clientset", func() {
 		options = api.ListOptions{LabelSelector: selector}
 		pods, err = podClient.List(options)
 		if err != nil {
-			Fail(fmt.Sprintf("Failed to list pods to verify deletion: %v", err))
+			framework.Failf("Failed to list pods to verify deletion: %v", err)
 		}
 		Expect(len(pods.Items)).To(Equal(0))
 	})
@@ -175,7 +174,7 @@ var _ = framework.KubeDescribe("Generated release_1_3 clientset", func() {
 	It("should create pods, delete pods, watch pods", func() {
 		podClient := f.Clientset_1_3.Core().Pods(f.Namespace.Name)
 		By("constructing the pod")
-		name := "pod" + string(util.NewUUID())
+		name := "pod" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		podCopy := testingPod(name, value)
 		pod := &podCopy
@@ -238,7 +237,7 @@ var _ = framework.KubeDescribe("Generated release_1_3 clientset", func() {
 		options = api.ListOptions{LabelSelector: selector}
 		pods, err = podClient.List(options)
 		if err != nil {
-			Fail(fmt.Sprintf("Failed to list pods to verify deletion: %v", err))
+			framework.Failf("Failed to list pods to verify deletion: %v", err)
 		}
 		Expect(len(pods.Items)).To(Equal(0))
 	})

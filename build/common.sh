@@ -45,7 +45,7 @@ readonly KUBE_GCS_DELETE_EXISTING="${KUBE_GCS_DELETE_EXISTING:-n}"
 
 # Constants
 readonly KUBE_BUILD_IMAGE_REPO=kube-build
-readonly KUBE_BUILD_IMAGE_CROSS_TAG="v1.6.2-2"
+readonly KUBE_BUILD_IMAGE_CROSS_TAG="v1.6.3-1"
 # KUBE_BUILD_DATA_CONTAINER_NAME=kube-build-data-<hash>"
 
 # Here we map the output directories across both the local and remote _output
@@ -173,7 +173,7 @@ function kube::build::docker_available_on_osx() {
       kube::log::status "Using Docker for MacOS"
       return 0
     fi
-    
+
     kube::log::status "No docker host is set. Checking options for setting one..."
     if [[ -z "$(which docker-machine)" && -z "$(which boot2docker)" ]]; then
       kube::log::status "It looks like you're running Mac OS X, yet none of Docker for Mac, docker-machine or boot2docker are on the path."
@@ -1086,7 +1086,7 @@ function kube::release::gcs::verify_prereqs() {
   fi
 
   if [[ -z "${GCLOUD_ACCOUNT-}" ]]; then
-    GCLOUD_ACCOUNT=$(gcloud auth list 2>/dev/null | awk '/(active)/ { print $2 }')
+    GCLOUD_ACCOUNT=$(gcloud config list --format='value(core.account)' 2>/dev/null)
   fi
   if [[ -z "${GCLOUD_ACCOUNT-}" ]]; then
     echo "No account authorized through gcloud.  Please fix with:"
@@ -1096,7 +1096,7 @@ function kube::release::gcs::verify_prereqs() {
   fi
 
   if [[ -z "${GCLOUD_PROJECT-}" ]]; then
-    GCLOUD_PROJECT=$(gcloud config list project | awk '{project = $3} END {print project}')
+    GCLOUD_PROJECT=$(gcloud config list --format='value(core.project)' 2>/dev/null)
   fi
   if [[ -z "${GCLOUD_PROJECT-}" ]]; then
     echo "No account authorized through gcloud.  Please fix with:"
@@ -1594,7 +1594,7 @@ function kube::release::docker::release() {
 
 function kube::release::gcloud_account_is_active() {
   local -r account="${1-}"
-  if [[ -n $(gcloud auth list --filter-account $account 2>/dev/null | grep "active") ]]; then
+  if [[ "$(gcloud config list --format='value(core.account)')" == "${account}" ]]; then
     return 0
   else
     return 1

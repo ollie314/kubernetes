@@ -33,6 +33,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/credentialprovider"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
+	"k8s.io/kubernetes/pkg/kubelet/images"
 	"k8s.io/kubernetes/pkg/kubelet/leaky"
 	"k8s.io/kubernetes/pkg/types"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
@@ -44,6 +45,7 @@ const (
 	PodInfraContainerName = leaky.PodInfraContainerName
 	DockerPrefix          = "docker://"
 	LogSuffix             = "log"
+	ext4MaxFileNameLen    = 255
 )
 
 const (
@@ -142,7 +144,7 @@ func filterHTTPError(err error, image string) error {
 		jerr.Code == http.StatusServiceUnavailable ||
 		jerr.Code == http.StatusGatewayTimeout) {
 		glog.V(2).Infof("Pulling image %q failed: %v", image, err)
-		return kubecontainer.RegistryUnavailable
+		return images.RegistryUnavailable
 	} else {
 		return err
 	}
@@ -248,7 +250,7 @@ func (p throttledDockerPuller) IsImagePresent(name string) (bool, error) {
 }
 
 // Creates a name which can be reversed to identify both full pod name and container name.
-// This function returns stable name, unique name and an unique id.
+// This function returns stable name, unique name and a unique id.
 // Although rand.Uint32() is not really unique, but it's enough for us because error will
 // only occur when instances of the same container in the same pod have the same UID. The
 // chance is really slim.
@@ -299,7 +301,13 @@ func ParseDockerName(name string) (dockerName *KubeletContainerName, hash uint64
 }
 
 func LogSymlink(containerLogsDir, podFullName, containerName, dockerId string) string {
-	return path.Join(containerLogsDir, fmt.Sprintf("%s_%s-%s.%s", podFullName, containerName, dockerId, LogSuffix))
+	suffix := fmt.Sprintf(".%s", LogSuffix)
+	logPath := fmt.Sprintf("%s_%s-%s", podFullName, containerName, dockerId)
+	// Length of a filename cannot exceed 255 characters in ext4 on Linux.
+	if len(logPath) > ext4MaxFileNameLen-len(suffix) {
+		logPath = logPath[:ext4MaxFileNameLen-len(suffix)]
+	}
+	return path.Join(containerLogsDir, logPath+suffix)
 }
 
 // Get a *dockerapi.Client, either using the endpoint passed in, or using

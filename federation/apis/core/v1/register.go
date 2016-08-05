@@ -32,15 +32,21 @@ var SchemeGroupVersion = unversioned.GroupVersion{Group: GroupName, Version: "v1
 func AddToScheme(scheme *runtime.Scheme) {
 	// Add the API to Scheme.
 	addKnownTypes(scheme)
+	addConversionFuncs(scheme)
+	addDefaultingFuncs(scheme)
 }
 
 // Adds the list of known types to api.Scheme.
 func addKnownTypes(scheme *runtime.Scheme) {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&v1.Service{},
+		&v1.Namespace{},
+		&v1.NamespaceList{},
 		&v1.ServiceList{},
 		&v1.ListOptions{},
 		&v1.DeleteOptions{},
+		&v1.Secret{},
+		&v1.SecretList{},
 	)
 
 	// Add common types

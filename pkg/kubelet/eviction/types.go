@@ -30,6 +30,22 @@ type Signal string
 const (
 	// SignalMemoryAvailable is memory available (i.e. capacity - workingSet), in bytes.
 	SignalMemoryAvailable Signal = "memory.available"
+	// SignalNodeFsAvailable is amount of storage available on filesystem that kubelet uses for volumes, daemon logs, etc.
+	SignalNodeFsAvailable Signal = "nodefs.available"
+	// SignalImageFsAvailable is amount of storage available on filesystem that container runtime uses for storing images and container writable layers.
+	SignalImageFsAvailable Signal = "imagefs.available"
+)
+
+// fsStatsType defines the types of filesystem stats to collect.
+type fsStatsType string
+
+const (
+	// fsStatsLocalVolumeSource identifies stats for pod local volume sources.
+	fsStatsLocalVolumeSource fsStatsType = "localVolumeSource"
+	// fsStatsLogs identifies stats for pod logs.
+	fsStatsLogs fsStatsType = "logs"
+	// fsStatsRoot identifies stats for pod container writable layers.
+	fsStatsRoot fsStatsType = "root"
 )
 
 // ThresholdOperator is the operator used to express a Threshold.
@@ -60,15 +76,32 @@ type Threshold struct {
 	Value *resource.Quantity
 	// GracePeriod represents the amount of time that a threshold must be met before eviction is triggered.
 	GracePeriod time.Duration
+	// MinReclaim represents the minimum amount of resource to reclaim if the threshold is met.
+	MinReclaim *resource.Quantity
 }
 
 // Manager evaluates when an eviction threshold for node stability has been met on the node.
 type Manager interface {
 	// Start starts the control loop to monitor eviction thresholds at specified interval.
-	Start(podFunc ActivePodsFunc, monitoringInterval time.Duration)
+	Start(diskInfoProvider DiskInfoProvider, podFunc ActivePodsFunc, monitoringInterval time.Duration) error
 
 	// IsUnderMemoryPressure returns true if the node is under memory pressure.
 	IsUnderMemoryPressure() bool
+
+	// IsUnderDiskPressure returns true if the node is under disk pressure.
+	IsUnderDiskPressure() bool
+}
+
+// DiskInfoProvider is responsible for informing the manager how disk is configured.
+type DiskInfoProvider interface {
+	// HasDedicatedImageFs returns true if the imagefs is on a separate device from the rootfs.
+	HasDedicatedImageFs() (bool, error)
+}
+
+// ImageGC is responsible for performing garbage collection of unused images.
+type ImageGC interface {
+	// DeleteUnusedImages deletes unused images and returns the number of bytes freed, or an error.
+	DeleteUnusedImages() (int64, error)
 }
 
 // KillPodFunc kills a pod.
@@ -97,3 +130,9 @@ type thresholdsObservedAt map[Threshold]time.Time
 
 // nodeConditionsObservedAt maps a node condition to a time that it was observed
 type nodeConditionsObservedAt map[api.NodeConditionType]time.Time
+
+// nodeReclaimFunc is a function that knows how to reclaim a resource from the node without impacting pods.
+type nodeReclaimFunc func() (*resource.Quantity, error)
+
+// nodeReclaimFuncs is an ordered list of nodeReclaimFunc
+type nodeReclaimFuncs []nodeReclaimFunc

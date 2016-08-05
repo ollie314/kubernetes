@@ -26,6 +26,7 @@ import (
 	"k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/util/wait"
 
+	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
 
@@ -44,7 +45,7 @@ type PodClient struct {
 
 // Create creates a new pod according to the framework specifications (don't wait for it to start).
 func (c *PodClient) Create(pod *api.Pod) *api.Pod {
-	c.MungeSpec(pod)
+	c.mungeSpec(pod)
 	p, err := c.PodInterface.Create(pod)
 	ExpectNoError(err, "Error creating Pod")
 	return p
@@ -54,36 +55,26 @@ func (c *PodClient) Create(pod *api.Pod) *api.Pod {
 func (c *PodClient) CreateSync(pod *api.Pod) *api.Pod {
 	p := c.Create(pod)
 	ExpectNoError(c.f.WaitForPodRunning(p.Name))
+	// Get the newest pod after it becomes running, some status may change after pod created, such as pod ip.
+	p, err := c.Get(pod.Name)
+	ExpectNoError(err)
 	return p
 }
 
 // CreateBatch create a batch of pods. All pods are created before waiting.
 func (c *PodClient) CreateBatch(pods []*api.Pod) []*api.Pod {
 	ps := make([]*api.Pod, len(pods))
-	for i, pod := range pods {
-		ps[i] = c.Create(pod)
-	}
 	var wg sync.WaitGroup
-	for _, pod := range ps {
+	for i, pod := range pods {
 		wg.Add(1)
-		podName := pod.Name
-		go func() {
-			ExpectNoError(c.f.WaitForPodRunning(podName))
-			wg.Done()
-		}()
+		go func(i int, pod *api.Pod) {
+			defer wg.Done()
+			defer GinkgoRecover()
+			ps[i] = c.CreateSync(pod)
+		}(i, pod)
 	}
 	wg.Wait()
 	return ps
-}
-
-// MungeSpec apply test-suite specific transformations to the pod spec.
-// TODO: Refactor the framework to always use PodClient so that we can completely hide the munge logic
-// in the PodClient.
-func (c *PodClient) MungeSpec(pod *api.Pod) {
-	if TestContext.NodeName != "" {
-		Expect(pod.Spec.NodeName).To(Or(BeZero(), Equal(TestContext.NodeName)), "Test misconfigured")
-		pod.Spec.NodeName = TestContext.NodeName
-	}
 }
 
 // Update updates the pod object. It retries if there is a conflict, throw out error if
@@ -107,6 +98,14 @@ func (c *PodClient) Update(name string, updateFn func(pod *api.Pod)) {
 		}
 		return false, fmt.Errorf("failed to update pod %q: %v", name, err)
 	}))
+}
+
+// mungeSpec apply test-suite specific transformations to the pod spec.
+func (c *PodClient) mungeSpec(pod *api.Pod) {
+	if TestContext.NodeName != "" {
+		Expect(pod.Spec.NodeName).To(Or(BeZero(), Equal(TestContext.NodeName)), "Test misconfigured")
+		pod.Spec.NodeName = TestContext.NodeName
+	}
 }
 
 // TODO(random-liu): Move pod wait function into this file

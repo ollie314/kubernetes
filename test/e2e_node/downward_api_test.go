@@ -21,7 +21,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/resource"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/uuid"
 	"k8s.io/kubernetes/test/e2e/framework"
 
 	. "github.com/onsi/ginkgo"
@@ -32,7 +32,7 @@ import (
 var _ = framework.KubeDescribe("Downward API", func() {
 	f := framework.NewDefaultFramework("downward-api")
 	It("should provide pod name and namespace as env vars [Conformance]", func() {
-		podName := "downward-api-" + string(util.NewUUID())
+		podName := "downward-api-" + string(uuid.NewUUID())
 		env := []api.EnvVar{
 			{
 				Name: "POD_NAME",
@@ -63,7 +63,7 @@ var _ = framework.KubeDescribe("Downward API", func() {
 	})
 
 	It("should provide pod IP as an env var", func() {
-		podName := "downward-api-" + string(util.NewUUID())
+		podName := "downward-api-" + string(uuid.NewUUID())
 		env := []api.EnvVar{
 			{
 				Name: "POD_IP",
@@ -84,7 +84,7 @@ var _ = framework.KubeDescribe("Downward API", func() {
 	})
 
 	It("should provide container's limits.cpu/memory and requests.cpu/memory as env vars", func() {
-		podName := "downward-api-" + string(util.NewUUID())
+		podName := "downward-api-" + string(uuid.NewUUID())
 		env := []api.EnvVar{
 			{
 				Name: "CPU_LIMIT",
@@ -140,7 +140,7 @@ func testDownwardAPI(f *framework.Framework, podName string, env []api.EnvVar, e
 			Containers: []api.Container{
 				{
 					Name:    "dapi-container",
-					Image:   "gcr.io/google_containers/busybox:1.24",
+					Image:   ImageRegistry[busyBoxImage],
 					Command: []string{"sh", "-c", "env"},
 					Resources: api.ResourceRequirements{
 						Requests: api.ResourceList{
@@ -158,8 +158,5 @@ func testDownwardAPI(f *framework.Framework, podName string, env []api.EnvVar, e
 			RestartPolicy: api.RestartPolicyNever,
 		},
 	}
-	// TODO(random-liu): Change TestContainerOutputRegexp to use PodClient and avoid MungeSpec explicitly
-	f.PodClient().MungeSpec(pod)
-
 	f.TestContainerOutputRegexp("downward api env vars", pod, 0, expectations)
 }

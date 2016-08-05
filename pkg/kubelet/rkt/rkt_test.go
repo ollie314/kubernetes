@@ -374,18 +374,20 @@ func TestGetPods(t *testing.T) {
 					Namespace: "default",
 					Containers: []*kubecontainer.Container{
 						{
-							ID:    kubecontainer.BuildContainerID("rkt", "uuid-4002:app-1"),
-							Name:  "app-1",
-							Image: "img-name-1:latest",
-							Hash:  1001,
-							State: "running",
+							ID:      kubecontainer.BuildContainerID("rkt", "uuid-4002:app-1"),
+							Name:    "app-1",
+							Image:   "img-name-1:latest",
+							ImageID: "img-id-1",
+							Hash:    1001,
+							State:   "running",
 						},
 						{
-							ID:    kubecontainer.BuildContainerID("rkt", "uuid-4002:app-2"),
-							Name:  "app-2",
-							Image: "img-name-2:latest",
-							Hash:  1002,
-							State: "exited",
+							ID:      kubecontainer.BuildContainerID("rkt", "uuid-4002:app-2"),
+							Name:    "app-2",
+							Image:   "img-name-2:latest",
+							ImageID: "img-id-2",
+							Hash:    1002,
+							State:   "exited",
 						},
 					},
 				},
@@ -435,18 +437,20 @@ func TestGetPods(t *testing.T) {
 					Namespace: "default",
 					Containers: []*kubecontainer.Container{
 						{
-							ID:    kubecontainer.BuildContainerID("rkt", "uuid-4002:app-1"),
-							Name:  "app-1",
-							Image: "img-name-1:latest",
-							Hash:  1001,
-							State: "running",
+							ID:      kubecontainer.BuildContainerID("rkt", "uuid-4002:app-1"),
+							Name:    "app-1",
+							Image:   "img-name-1:latest",
+							ImageID: "img-id-1",
+							Hash:    1001,
+							State:   "running",
 						},
 						{
-							ID:    kubecontainer.BuildContainerID("rkt", "uuid-4002:app-2"),
-							Name:  "app-2",
-							Image: "img-name-2:latest",
-							Hash:  1002,
-							State: "exited",
+							ID:      kubecontainer.BuildContainerID("rkt", "uuid-4002:app-2"),
+							Name:    "app-2",
+							Image:   "img-name-2:latest",
+							ImageID: "img-id-2",
+							Hash:    1002,
+							State:   "exited",
 						},
 					},
 				},
@@ -456,32 +460,36 @@ func TestGetPods(t *testing.T) {
 					Namespace: "default",
 					Containers: []*kubecontainer.Container{
 						{
-							ID:    kubecontainer.BuildContainerID("rkt", "uuid-4003:app-11"),
-							Name:  "app-11",
-							Image: "img-name-11:latest",
-							Hash:  10011,
-							State: "exited",
+							ID:      kubecontainer.BuildContainerID("rkt", "uuid-4003:app-11"),
+							Name:    "app-11",
+							Image:   "img-name-11:latest",
+							ImageID: "img-id-11",
+							Hash:    10011,
+							State:   "exited",
 						},
 						{
-							ID:    kubecontainer.BuildContainerID("rkt", "uuid-4003:app-22"),
-							Name:  "app-22",
-							Image: "img-name-22:latest",
-							Hash:  10022,
-							State: "exited",
+							ID:      kubecontainer.BuildContainerID("rkt", "uuid-4003:app-22"),
+							Name:    "app-22",
+							Image:   "img-name-22:latest",
+							ImageID: "img-id-22",
+							Hash:    10022,
+							State:   "exited",
 						},
 						{
-							ID:    kubecontainer.BuildContainerID("rkt", "uuid-4004:app-11"),
-							Name:  "app-11",
-							Image: "img-name-11:latest",
-							Hash:  10011,
-							State: "running",
+							ID:      kubecontainer.BuildContainerID("rkt", "uuid-4004:app-11"),
+							Name:    "app-11",
+							Image:   "img-name-11:latest",
+							ImageID: "img-id-11",
+							Hash:    10011,
+							State:   "running",
 						},
 						{
-							ID:    kubecontainer.BuildContainerID("rkt", "uuid-4004:app-22"),
-							Name:  "app-22",
-							Image: "img-name-22:latest",
-							Hash:  10022,
-							State: "running",
+							ID:      kubecontainer.BuildContainerID("rkt", "uuid-4004:app-22"),
+							Name:    "app-22",
+							Image:   "img-name-22:latest",
+							ImageID: "img-id-22",
+							Hash:    10022,
+							State:   "running",
 						},
 					},
 				},
@@ -940,21 +948,23 @@ func TestSetApp(t *testing.T) {
 	fsgid := int64(3)
 
 	tests := []struct {
-		container *api.Container
-		opts      *kubecontainer.RunContainerOptions
-		ctx       *api.SecurityContext
-		podCtx    *api.PodSecurityContext
-		expect    *appctypes.App
-		err       error
+		container        *api.Container
+		opts             *kubecontainer.RunContainerOptions
+		ctx              *api.SecurityContext
+		podCtx           *api.PodSecurityContext
+		supplementalGids []int64
+		expect           *appctypes.App
+		err              error
 	}{
 		// Nothing should change, but the "User" and "Group" should be filled.
 		{
-			container: &api.Container{},
-			opts:      &kubecontainer.RunContainerOptions{},
-			ctx:       nil,
-			podCtx:    nil,
-			expect:    baseAppWithRootUserGroup(t),
-			err:       nil,
+			container:        &api.Container{},
+			opts:             &kubecontainer.RunContainerOptions{},
+			ctx:              nil,
+			podCtx:           nil,
+			supplementalGids: nil,
+			expect:           baseAppWithRootUserGroup(t),
+			err:              nil,
 		},
 
 		// error verifying non-root.
@@ -965,9 +975,10 @@ func TestSetApp(t *testing.T) {
 				RunAsNonRoot: &runAsNonRootTrue,
 				RunAsUser:    &rootUser,
 			},
-			podCtx: nil,
-			expect: nil,
-			err:    fmt.Errorf("container has no runAsUser and image will run as root"),
+			podCtx:           nil,
+			supplementalGids: nil,
+			expect:           nil,
+			err:              fmt.Errorf("container has no runAsUser and image will run as root"),
 		},
 
 		// app's args should be changed.
@@ -975,9 +986,10 @@ func TestSetApp(t *testing.T) {
 			container: &api.Container{
 				Args: []string{"foo"},
 			},
-			opts:   &kubecontainer.RunContainerOptions{},
-			ctx:    nil,
-			podCtx: nil,
+			opts:             &kubecontainer.RunContainerOptions{},
+			ctx:              nil,
+			podCtx:           nil,
+			supplementalGids: nil,
 			expect: &appctypes.App{
 				Exec:              appctypes.Exec{"/bin/foo", "foo"},
 				User:              "0",
@@ -1036,11 +1048,12 @@ func TestSetApp(t *testing.T) {
 				SupplementalGroups: []int64{1, 2},
 				FSGroup:            &fsgid,
 			},
+			supplementalGids: []int64{4},
 			expect: &appctypes.App{
 				Exec:              appctypes.Exec{"/bin/bar", "foo"},
 				User:              "42",
 				Group:             "0",
-				SupplementaryGIDs: []int{1, 2, 3},
+				SupplementaryGIDs: []int{1, 2, 3, 4},
 				WorkingDirectory:  tmpDir,
 				Environment: []appctypes.EnvironmentVariable{
 					{"env-foo", "bar"},
@@ -1099,11 +1112,12 @@ func TestSetApp(t *testing.T) {
 				SupplementalGroups: []int64{1, 2},
 				FSGroup:            &fsgid,
 			},
+			supplementalGids: []int64{4},
 			expect: &appctypes.App{
 				Exec:              appctypes.Exec{"/bin/hello", "foo", "hello", "world", "bar"},
 				User:              "42",
 				Group:             "0",
-				SupplementaryGIDs: []int{1, 2, 3},
+				SupplementaryGIDs: []int{1, 2, 3, 4},
 				WorkingDirectory:  tmpDir,
 				Environment: []appctypes.EnvironmentVariable{
 					{"env-foo", "foo"},
@@ -1128,7 +1142,7 @@ func TestSetApp(t *testing.T) {
 	for i, tt := range tests {
 		testCaseHint := fmt.Sprintf("test case #%d", i)
 		img := baseImageManifest(t)
-		err := setApp(img, tt.container, tt.opts, tt.ctx, tt.podCtx)
+		err := setApp(img, tt.container, tt.opts, tt.ctx, tt.podCtx, tt.supplementalGids)
 		if err == nil && tt.err != nil || err != nil && tt.err == nil {
 			t.Errorf("%s: expect %v, saw %v", testCaseHint, tt.err, err)
 		}

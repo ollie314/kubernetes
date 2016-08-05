@@ -1907,8 +1907,9 @@ func TestValidatePodSpec(t *testing.T) {
 			Volumes: []api.Volume{
 				{Name: "vol", VolumeSource: api.VolumeSource{EmptyDir: &api.EmptyDirVolumeSource{}}},
 			},
-			Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-			RestartPolicy: api.RestartPolicyAlways,
+			Containers:     []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
+			InitContainers: []api.Container{{Name: "ictr", Image: "iimage", ImagePullPolicy: "IfNotPresent"}},
+			RestartPolicy:  api.RestartPolicyAlways,
 			NodeSelector: map[string]string{
 				"key": "value",
 			},
@@ -1998,6 +1999,12 @@ func TestValidatePodSpec(t *testing.T) {
 			Containers:    []api.Container{{}},
 			RestartPolicy: api.RestartPolicyAlways,
 			DNSPolicy:     api.DNSClusterFirst,
+		},
+		"bad init container": {
+			Containers:     []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
+			InitContainers: []api.Container{{}},
+			RestartPolicy:  api.RestartPolicyAlways,
+			DNSPolicy:      api.DNSClusterFirst,
 		},
 		"bad DNS policy": {
 			DNSPolicy:     api.DNSPolicy("invalid"),
@@ -3024,6 +3031,35 @@ func TestValidatePodUpdate(t *testing.T) {
 		},
 		{
 			api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					Name: "foo",
+				},
+				Spec: api.PodSpec{
+					InitContainers: []api.Container{
+						{
+							Image: "foo:V1",
+						},
+					},
+				},
+			},
+			api.Pod{
+				ObjectMeta: api.ObjectMeta{Name: "foo"},
+				Spec: api.PodSpec{
+					InitContainers: []api.Container{
+						{
+							Image: "foo:V2",
+						},
+						{
+							Image: "bar:V2",
+						},
+					},
+				},
+			},
+			false,
+			"more init containers",
+		},
+		{
+			api.Pod{
 				ObjectMeta: api.ObjectMeta{Name: "foo"},
 				Spec:       api.PodSpec{Containers: []api.Container{{Image: "foo:V1"}}},
 			},
@@ -3074,6 +3110,30 @@ func TestValidatePodUpdate(t *testing.T) {
 			api.Pod{
 				ObjectMeta: api.ObjectMeta{Name: "foo"},
 				Spec: api.PodSpec{
+					InitContainers: []api.Container{
+						{
+							Image: "foo:V1",
+						},
+					},
+				},
+			},
+			api.Pod{
+				ObjectMeta: api.ObjectMeta{Name: "foo"},
+				Spec: api.PodSpec{
+					InitContainers: []api.Container{
+						{
+							Image: "foo:V2",
+						},
+					},
+				},
+			},
+			true,
+			"init container image change",
+		},
+		{
+			api.Pod{
+				ObjectMeta: api.ObjectMeta{Name: "foo"},
+				Spec: api.PodSpec{
 					Containers: []api.Container{
 						{},
 					},
@@ -3091,6 +3151,28 @@ func TestValidatePodUpdate(t *testing.T) {
 			},
 			false,
 			"image change to empty",
+		},
+		{
+			api.Pod{
+				ObjectMeta: api.ObjectMeta{Name: "foo"},
+				Spec: api.PodSpec{
+					InitContainers: []api.Container{
+						{},
+					},
+				},
+			},
+			api.Pod{
+				ObjectMeta: api.ObjectMeta{Name: "foo"},
+				Spec: api.PodSpec{
+					InitContainers: []api.Container{
+						{
+							Image: "foo:V2",
+						},
+					},
+				},
+			},
+			false,
+			"init container image change to empty",
 		},
 		{
 			api.Pod{
@@ -3367,7 +3449,7 @@ func TestValidateService(t *testing.T) {
 		{
 			name: "too long name",
 			tweakSvc: func(s *api.Service) {
-				s.Name = strings.Repeat("a", 25)
+				s.Name = strings.Repeat("a", 64)
 			},
 			numErrs: 1,
 		},
@@ -3381,7 +3463,7 @@ func TestValidateService(t *testing.T) {
 		{
 			name: "too long generateName",
 			tweakSvc: func(s *api.Service) {
-				s.GenerateName = strings.Repeat("a", 25)
+				s.GenerateName = strings.Repeat("a", 64)
 			},
 			numErrs: 1,
 		},
@@ -5898,7 +5980,7 @@ func TestValidateSecret(t *testing.T) {
 	overMaxSize.Data = map[string][]byte{
 		"over": make([]byte, api.MaxSecretSize+1),
 	}
-	invalidKey.Data["a..b"] = []byte("whoops")
+	invalidKey.Data["a*b"] = []byte("whoops")
 	leadingDotKey.Data[".key"] = []byte("bar")
 	dotKey.Data["."] = []byte("bar")
 	doubleDotKey.Data[".."] = []byte("bar")
@@ -6503,7 +6585,7 @@ func TestValidateConfigMap(t *testing.T) {
 		invalidName      = newConfigMap("NoUppercaseOrSpecialCharsLike=Equals", "validns", nil)
 		emptyNs          = newConfigMap("validname", "", nil)
 		invalidNs        = newConfigMap("validname", "NoUppercaseOrSpecialCharsLike=Equals", nil)
-		invalidKey       = newConfigMap("validname", "validns", map[string]string{"a..b": "value"})
+		invalidKey       = newConfigMap("validname", "validns", map[string]string{"a*b": "value"})
 		leadingDotKey    = newConfigMap("validname", "validns", map[string]string{".ab": "value"})
 		dotKey           = newConfigMap("validname", "validns", map[string]string{".": "value"})
 		doubleDotKey     = newConfigMap("validname", "validns", map[string]string{"..": "value"})

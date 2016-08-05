@@ -2,15 +2,15 @@
 
 <!-- BEGIN STRIP_FOR_RELEASE -->
 
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
-<img src="http://kubernetes.io/img/warning.png" alt="WARNING"
+<img src="http://kubernetes.io/kubernetes/img/warning.png" alt="WARNING"
      width="25" height="25">
 
 <h2>PLEASE NOTE: This document applies to the HEAD of the source tree</h2>
@@ -51,6 +51,7 @@ Why run tests *Locally*?  Much faster than running tests Remotely.
 Prerequisites:
 - [Install etcd](https://github.com/coreos/etcd/releases) on your PATH
   - Verify etcd is installed correctly by running `which etcd`
+  - Or make etcd binary available and executable at `/tmp/etcd`
 - [Install ginkgo](https://github.com/onsi/ginkgo) on your PATH
   - Verify ginkgo is installed correctly by running `which ginkgo`
 
@@ -203,6 +204,38 @@ less useful for catching flakes related creating the instance from an image.**
 
 ```sh
 make test-e2e-node REMOTE=true RUN_UNTIL_FAILURE=true
+```
+
+## Run tests in parallel
+
+Running test in parallel can usually shorten the test duration. By default node
+e2e test runs with`--nodes=8` (see ginkgo flag
+[--nodes](https://onsi.github.io/ginkgo/#parallel-specs)). You can use the
+`PARALLELISM` option to change the parallelism.
+
+```sh
+make test-e2e-node PARALLELISM=4 # run test with 4 parallel nodes
+make test-e2e-node PARALLELISM=1 # run test sequentially
+```
+
+## Run tests with kubenet network plugin
+
+[kubenet](http://kubernetes.io/docs/admin/network-plugins/#kubenet) is
+the default network plugin used by kubelet since Kubernetes 1.3.  The
+plugin requires [CNI](https://github.com/containernetworking/cni) and
+[nsenter](http://man7.org/linux/man-pages/man1/nsenter.1.html).
+
+Currently, kubenet is enabled by default for Remote execution `REMOTE=true`,
+but disabled for Local execution.  **Note: kubenet is not supported for
+local execution currently. This may cause network related test result to be
+different for Local and Remote execution. So if you want to run network
+related test, Remote execution is recommended.**
+
+To enable/disable kubenet:
+
+```sh
+make test_e2e_node TEST_ARGS="--disable-kubenet=true" # enable kubenet
+make test_e2e_node TEST_ARGS="--disable-kubenet=false" # disable kubenet
 ```
 
 ## Additional QoS Cgroups Hierarchy level testing

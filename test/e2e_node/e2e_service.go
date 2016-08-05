@@ -42,11 +42,11 @@ type e2eService struct {
 	killCmds []*killCmd
 	rmDirs   []string
 
-	etcdDataDir         string
-	kubeletStaticPodDir string
-	nodeName            string
-	logFiles            map[string]logFileData
-	cgroupsPerQOS       bool
+	context       *SharedContext
+	etcdDataDir   string
+	nodeName      string
+	logFiles      map[string]logFileData
+	cgroupsPerQOS bool
 }
 
 type logFileData struct {
@@ -57,9 +57,11 @@ type logFileData struct {
 const (
 	// This is consistent with the level used in a cluster e2e test.
 	LOG_VERBOSITY_LEVEL = "4"
+	// Etcd binary is expected to either be available via PATH, or at this location.
+	defaultEtcdPath = "/tmp/etcd"
 )
 
-func newE2eService(nodeName string, cgroupsPerQOS bool) *e2eService {
+func newE2eService(nodeName string, cgroupsPerQOS bool, context *SharedContext) *e2eService {
 	// Special log files that need to be collected for additional debugging.
 	var logFiles = map[string]logFileData{
 		"kern.log":   {[]string{"/var/log/kern.log"}, []string{"-k"}},
@@ -67,6 +69,7 @@ func newE2eService(nodeName string, cgroupsPerQOS bool) *e2eService {
 	}
 
 	return &e2eService{
+		context:       context,
 		nodeName:      nodeName,
 		logFiles:      logFiles,
 		cgroupsPerQOS: cgroupsPerQOS,
@@ -99,7 +102,7 @@ func (es *e2eService) start() error {
 		return err
 	}
 	es.killCmds = append(es.killCmds, cmd)
-	es.rmDirs = append(es.rmDirs, es.kubeletStaticPodDir)
+	es.rmDirs = append(es.rmDirs, es.context.PodConfigPath)
 
 	return nil
 }
@@ -179,7 +182,16 @@ func (es *e2eService) startEtcd() (*killCmd, error) {
 		return nil, err
 	}
 	es.etcdDataDir = dataDir
-	cmd := exec.Command("etcd")
+	etcdPath, err := exec.LookPath("etcd")
+	if err != nil {
+		glog.Infof("etcd not found in PATH. Defaulting to %s...", defaultEtcdPath)
+		_, err = os.Stat(defaultEtcdPath)
+		if err != nil {
+			return nil, fmt.Errorf("etcd binary not found")
+		}
+		etcdPath = defaultEtcdPath
+	}
+	cmd := exec.Command(etcdPath)
 	// Execute etcd in the data directory instead of using --data-dir because the flag sometimes requires additional
 	// configuration (e.g. --name in version 0.4.9)
 	cmd.Dir = es.etcdDataDir
@@ -211,7 +223,7 @@ func (es *e2eService) startKubeletServer() (*killCmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	es.kubeletStaticPodDir = dataDir
+	es.context.PodConfigPath = dataDir
 	var killOverride *exec.Cmd
 	cmdArgs := []string{}
 	if systemdRun, err := exec.LookPath("systemd-run"); err == nil {
@@ -227,6 +239,10 @@ func (es *e2eService) startKubeletServer() (*killCmd, error) {
 		}
 	} else {
 		cmdArgs = append(cmdArgs, getKubeletServerBin())
+		cmdArgs = append(cmdArgs,
+			"--runtime-cgroups=/docker-daemon",
+			"--kubelet-cgroups=/kubelet",
+		)
 	}
 	cmdArgs = append(cmdArgs,
 		"--api-servers", "http://127.0.0.1:8080",
@@ -236,7 +252,7 @@ func (es *e2eService) startKubeletServer() (*killCmd, error) {
 		"--volume-stats-agg-period", "10s", // Aggregate volumes frequently so tests don't need to wait as long
 		"--allow-privileged", "true",
 		"--serialize-image-pulls", "false",
-		"--config", es.kubeletStaticPodDir,
+		"--config", es.context.PodConfigPath,
 		"--file-check-frequency", "10s", // Check file frequently so tests won't wait too long
 		"--v", LOG_VERBOSITY_LEVEL, "--logtostderr",
 		"--pod-cidr=10.180.0.0/24", // Assign a fixed CIDR to the node because there is no node controller.
@@ -397,5 +413,5 @@ func newHealthCheckCommand(healthCheckUrl string, cmd *exec.Cmd, filename string
 }
 
 func (hcc *healthCheckCommand) String() string {
-	return fmt.Sprintf("`%s %s` health-check: %s", hcc.Path, strings.Join(hcc.Args, " "), hcc.HealthCheckUrl)
+	return fmt.Sprintf("`%s` health-check: %s", strings.Join(append([]string{hcc.Path}, hcc.Args[1:]...), " "), hcc.HealthCheckUrl)
 }

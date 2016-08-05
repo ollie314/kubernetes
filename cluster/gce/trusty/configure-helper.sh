@@ -409,12 +409,27 @@ create_master_kubelet_auth() {
 # $4: value for variable 'cpulimit'
 # $5: pod name, which should be either etcd or etcd-events
 prepare_etcd_manifest() {
+  local host_name=$(hostname)
+  local etcd_cluster=""
+  local cluster_state="new"
+  for host in $(echo "${INITIAL_ETCD_CLUSTER:-${host_name}}" | tr "," "\n"); do
+    etcd_host="etcd-${host}=http://${host}:$3"
+    if [[ -n "${etcd_cluster}" ]]; then
+      etcd_cluster+=","
+      cluster_state="existing"
+    fi
+    etcd_cluster+="${etcd_host}"
+  done
   etcd_temp_file="/tmp/$5"
   cp /home/kubernetes/kube-manifests/kubernetes/gci-trusty/etcd.manifest "${etcd_temp_file}"
+  remove_salt_config_comments "${etcd_temp_file}"
   sed -i -e "s@{{ *suffix *}}@$1@g" "${etcd_temp_file}"
   sed -i -e "s@{{ *port *}}@$2@g" "${etcd_temp_file}"
   sed -i -e "s@{{ *server_port *}}@$3@g" "${etcd_temp_file}"
   sed -i -e "s@{{ *cpulimit *}}@\"$4\"@g" "${etcd_temp_file}"
+  sed -i -e "s@{{ *hostname *}}@$host_name@g" "${etcd_temp_file}"
+  sed -i -e "s@{{ *etcd_cluster *}}@$etcd_cluster@g" "${etcd_temp_file}"
+  sed -i -e "s@{{ *cluster_state *}}@$cluster_state@g" "${etcd_temp_file}"
   # Replace the volume host path
   sed -i -e "s@/mnt/master-pd/var/etcd@/mnt/disks/master-pd/var/etcd@g" "${etcd_temp_file}"
   mv "${etcd_temp_file}" /etc/kubernetes/manifests
@@ -542,7 +557,14 @@ start_kube_apiserver() {
   fi
 
   src_dir="/home/kubernetes/kube-manifests/kubernetes/gci-trusty"
-  cp "${src_dir}/abac-authz-policy.jsonl" /etc/srv/kubernetes/
+
+  if [[ -n "${KUBE_USER:-}" ]]; then
+	  local -r abac_policy_json="${src_dir}/abac-authz-policy.jsonl"
+	  remove_salt_config_comments "${abac_policy_json}"
+	  sed -i -e "s@{{kube_user}}@${KUBE_USER}@g" "${abac_policy_json}"
+	  cp "${abac_policy_json}" /etc/srv/kubernetes/
+  fi
+
   src_file="${src_dir}/kube-apiserver.manifest"
   remove_salt_config_comments "${src_file}"
   # Evaluate variables

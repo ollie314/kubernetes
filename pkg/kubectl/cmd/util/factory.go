@@ -164,7 +164,9 @@ const (
 	DeploymentV1Beta1GeneratorName              = "deployment/v1beta1"
 	JobV1Beta1GeneratorName                     = "job/v1beta1"
 	JobV1GeneratorName                          = "job/v1"
+	ScheduledJobV2Alpha1GeneratorName           = "scheduledjob/v2alpha1"
 	NamespaceV1GeneratorName                    = "namespace/v1"
+	ResourceQuotaV1GeneratorName                = "resourcequotas/v1"
 	SecretV1GeneratorName                       = "secret/v1"
 	SecretForDockerRegistryV1GeneratorName      = "secret-for-docker-registry/v1"
 	SecretForTLSV1GeneratorName                 = "secret-for-tls/v1"
@@ -179,11 +181,12 @@ func DefaultGenerators(cmdName string) map[string]kubectl.Generator {
 		ServiceV2GeneratorName: kubectl.ServiceGeneratorV2{},
 	}
 	generators["run"] = map[string]kubectl.Generator{
-		RunV1GeneratorName:             kubectl.BasicReplicationController{},
-		RunPodV1GeneratorName:          kubectl.BasicPod{},
-		DeploymentV1Beta1GeneratorName: kubectl.DeploymentV1Beta1{},
-		JobV1Beta1GeneratorName:        kubectl.JobV1Beta1{},
-		JobV1GeneratorName:             kubectl.JobV1{},
+		RunV1GeneratorName:                kubectl.BasicReplicationController{},
+		RunPodV1GeneratorName:             kubectl.BasicPod{},
+		DeploymentV1Beta1GeneratorName:    kubectl.DeploymentV1Beta1{},
+		JobV1Beta1GeneratorName:           kubectl.JobV1Beta1{},
+		JobV1GeneratorName:                kubectl.JobV1{},
+		ScheduledJobV2Alpha1GeneratorName: kubectl.ScheduledJobV2Alpha1{},
 	}
 	generators["autoscale"] = map[string]kubectl.Generator{
 		HorizontalPodAutoscalerV1Beta1GeneratorName: kubectl.HorizontalPodAutoscalerV1Beta1{},
@@ -192,6 +195,11 @@ func DefaultGenerators(cmdName string) map[string]kubectl.Generator {
 	generators["namespace"] = map[string]kubectl.Generator{
 		NamespaceV1GeneratorName: kubectl.NamespaceGeneratorV1{},
 	}
+
+	generators["quota"] = map[string]kubectl.Generator{
+		ResourceQuotaV1GeneratorName: kubectl.ResourceQuotaGeneratorV1{},
+	}
+
 	generators["secret"] = map[string]kubectl.Generator{
 		SecretV1GeneratorName: kubectl.SecretGeneratorV1{},
 	}
@@ -310,8 +318,8 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 						multiMapper = append(meta.MultiRESTMapper{thirdPartyMapper}, multiMapper...)
 					}
 					priorityMapper.Delegate = multiMapper
-					// Re-assign to the RESTMapper here because priorityMapper is actually a copy, so if we
-					// don't re-assign, the above assignement won't actually update mapper.RESTMapper
+					// Reassign to the RESTMapper here because priorityMapper is actually a copy, so if we
+					// don't reassign, the above assignement won't actually update mapper.RESTMapper
 					mapper.RESTMapper = priorityMapper
 				}
 			}
@@ -343,49 +351,29 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 			return clients.ClientConfigForVersion(nil)
 		},
 		ClientForMapping: func(mapping *meta.RESTMapping) (resource.RESTClient, error) {
-			gvk := mapping.GroupVersionKind
-			mappingVersion := mapping.GroupVersionKind.GroupVersion()
-			c, err := clients.ClientForVersion(&mappingVersion)
+			cfg, err := clientConfig.ClientConfig()
 			if err != nil {
 				return nil, err
 			}
-			switch gvk.Group {
-			case api.GroupName:
-				return c.RESTClient, nil
-			case autoscaling.GroupName:
-				return c.AutoscalingClient.RESTClient, nil
-			case batch.GroupName:
-				return c.BatchClient.RESTClient, nil
-			case policy.GroupName:
-				return c.PolicyClient.RESTClient, nil
-			case apps.GroupName:
-				return c.AppsClient.RESTClient, nil
-			case extensions.GroupName:
-				return c.ExtensionsClient.RESTClient, nil
-			case api.SchemeGroupVersion.Group:
-				return c.RESTClient, nil
-			case extensions.SchemeGroupVersion.Group:
-				return c.ExtensionsClient.RESTClient, nil
-			case federation.GroupName:
-				return clients.FederationClientForVersion(&mappingVersion)
-			case rbac.GroupName:
-				return c.RbacClient.RESTClient, nil
-			case certificates.GroupName:
-				return c.CertificatesClient.RESTClient, nil
-			default:
-				if !registered.IsThirdPartyAPIGroupVersion(gvk.GroupVersion()) {
-					return nil, fmt.Errorf("unknown api group/version: %s", gvk.String())
-				}
-				cfg, err := clientConfig.ClientConfig()
-				if err != nil {
-					return nil, err
-				}
-				gv := gvk.GroupVersion()
-				cfg.GroupVersion = &gv
-				cfg.APIPath = "/apis"
-				cfg.NegotiatedSerializer = thirdpartyresourcedata.NewNegotiatedSerializer(api.Codecs, gvk.Kind, gv, gv)
-				return restclient.RESTClientFor(cfg)
+			if err := client.SetKubernetesDefaults(cfg); err != nil {
+				return nil, err
 			}
+			gvk := mapping.GroupVersionKind
+			switch gvk.Group {
+			case federation.GroupName:
+				mappingVersion := mapping.GroupVersionKind.GroupVersion()
+				return clients.FederationClientForVersion(&mappingVersion)
+			case api.GroupName:
+				cfg.APIPath = "/api"
+			default:
+				cfg.APIPath = "/apis"
+			}
+			gv := gvk.GroupVersion()
+			cfg.GroupVersion = &gv
+			if registered.IsThirdPartyAPIGroupVersion(gvk.GroupVersion()) {
+				cfg.NegotiatedSerializer = thirdpartyresourcedata.NewNegotiatedSerializer(api.Codecs, gvk.Kind, gv, gv)
+			}
+			return restclient.RESTClientFor(cfg)
 		},
 		Describer: func(mapping *meta.RESTMapping) (kubectl.Describer, error) {
 			mappingVersion := mapping.GroupVersionKind.GroupVersion()
@@ -1020,7 +1008,7 @@ func getSchemaAndValidate(c schemaClient, data []byte, prefix, groupVersion, cac
 	}
 	err = schema.ValidateBytes(data)
 	if _, ok := err.(validation.TypeNotFoundError); ok && !firstSeen {
-		// As a temporay hack, kubectl would re-get the schema if validation
+		// As a temporary hack, kubectl would re-get the schema if validation
 		// fails for type not found reason.
 		// TODO: runtime-config settings needs to make into the file's name
 		schemaData, err = downloadSchemaAndStore(c, cacheDir, fullDir, cacheFile, prefix, groupVersion)
@@ -1120,7 +1108,7 @@ func (c *clientSwaggerSchema) ValidateBytes(data []byte) error {
 
 // DefaultClientConfig creates a clientcmd.ClientConfig with the following hierarchy:
 //   1.  Use the kubeconfig builder.  The number of merges and overrides here gets a little crazy.  Stay with me.
-//       1.  Merge together the kubeconfig itself.  This is done with the following hierarchy rules:
+//       1.  Merge the kubeconfig itself.  This is done with the following hierarchy rules:
 //           1.  CommandLineLocation - this parsed from the command line, so it must be late bound.  If you specify this,
 //               then no other kubeconfig files are merged.  This file must exist.
 //           2.  If $KUBECONFIG is set, then it is treated as a list of files that should be merged.

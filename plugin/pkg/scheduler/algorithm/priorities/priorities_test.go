@@ -138,20 +138,25 @@ func TestZeroRequest(t *testing.T) {
 
 	const expectedPriority int = 25
 	for _, test := range tests {
-		nodeNameToInfo := schedulercache.CreateNodeNameToInfoMap(test.pods)
-		for _, node := range test.nodes {
-			if _, ok := nodeNameToInfo[node.Name]; !ok {
-				nodeNameToInfo[node.Name] = schedulercache.NewNodeInfo()
-			}
-			nodeNameToInfo[node.Name].SetNode(node)
-		}
+		nodeNameToInfo := schedulercache.CreateNodeNameToInfoMap(test.pods, test.nodes)
 		list, err := scheduler.PrioritizeNodes(
 			test.pod,
 			nodeNameToInfo,
 			// This should match the configuration in defaultPriorities() in
 			// plugin/pkg/scheduler/algorithmprovider/defaults/defaults.go if you want
 			// to test what's actually in production.
-			[]algorithm.PriorityConfig{{Function: LeastRequestedPriority, Weight: 1}, {Function: BalancedResourceAllocation, Weight: 1}, {Function: NewSelectorSpreadPriority(algorithm.FakePodLister(test.pods), algorithm.FakeServiceLister([]api.Service{}), algorithm.FakeControllerLister([]api.ReplicationController{}), algorithm.FakeReplicaSetLister([]extensions.ReplicaSet{})), Weight: 1}},
+			[]algorithm.PriorityConfig{
+				{Function: LeastRequestedPriority, Weight: 1},
+				{Function: BalancedResourceAllocation, Weight: 1},
+				{
+					Function: NewSelectorSpreadPriority(
+						algorithm.FakePodLister(test.pods),
+						algorithm.FakeServiceLister([]api.Service{}),
+						algorithm.FakeControllerLister([]api.ReplicationController{}),
+						algorithm.FakeReplicaSetLister([]extensions.ReplicaSet{})),
+					Weight: 1,
+				},
+			},
 			algorithm.FakeNodeLister(test.nodes), []algorithm.SchedulerExtender{})
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
@@ -395,14 +400,8 @@ func TestLeastRequested(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		nodeNameToInfo := schedulercache.CreateNodeNameToInfoMap(test.pods)
-		for _, node := range test.nodes {
-			if _, ok := nodeNameToInfo[node.Name]; !ok {
-				nodeNameToInfo[node.Name] = schedulercache.NewNodeInfo()
-			}
-			nodeNameToInfo[node.Name].SetNode(node)
-		}
-		list, err := LeastRequestedPriority(test.pod, nodeNameToInfo, algorithm.FakeNodeLister(test.nodes))
+		nodeNameToInfo := schedulercache.CreateNodeNameToInfoMap(test.pods, test.nodes)
+		list, err := LeastRequestedPriority(test.pod, nodeNameToInfo, test.nodes)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -496,7 +495,7 @@ func TestNewNodeLabelPriority(t *testing.T) {
 			label:    test.label,
 			presence: test.presence,
 		}
-		list, err := prioritizer.CalculateNodeLabelPriority(nil, map[string]*schedulercache.NodeInfo{}, algorithm.FakeNodeLister(test.nodes))
+		list, err := prioritizer.CalculateNodeLabelPriority(nil, map[string]*schedulercache.NodeInfo{}, test.nodes)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -734,14 +733,8 @@ func TestBalancedResourceAllocation(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		nodeNameToInfo := schedulercache.CreateNodeNameToInfoMap(test.pods)
-		for _, node := range test.nodes {
-			if _, ok := nodeNameToInfo[node.Name]; !ok {
-				nodeNameToInfo[node.Name] = schedulercache.NewNodeInfo()
-			}
-			nodeNameToInfo[node.Name].SetNode(node)
-		}
-		list, err := BalancedResourceAllocation(test.pod, nodeNameToInfo, algorithm.FakeNodeLister(test.nodes))
+		nodeNameToInfo := schedulercache.CreateNodeNameToInfoMap(test.pods, test.nodes)
+		list, err := BalancedResourceAllocation(test.pod, nodeNameToInfo, test.nodes)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -884,8 +877,8 @@ func TestImageLocalityPriority(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		nodeNameToInfo := schedulercache.CreateNodeNameToInfoMap(test.pods)
-		list, err := ImageLocalityPriority(test.pod, nodeNameToInfo, algorithm.FakeNodeLister(test.nodes))
+		nodeNameToInfo := schedulercache.CreateNodeNameToInfoMap(test.pods, test.nodes)
+		list, err := ImageLocalityPriority(test.pod, nodeNameToInfo, test.nodes)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -1071,7 +1064,7 @@ func TestNodePreferAvoidPriority(t *testing.T) {
 			controllerLister: algorithm.FakeControllerLister(test.rcs),
 			replicaSetLister: algorithm.FakeReplicaSetLister(test.rss),
 		}
-		list, err := prioritizer.CalculateNodePreferAvoidPodsPriority(test.pod, map[string]*schedulercache.NodeInfo{}, algorithm.FakeNodeLister(test.nodes))
+		list, err := prioritizer.CalculateNodePreferAvoidPodsPriority(test.pod, map[string]*schedulercache.NodeInfo{}, test.nodes)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}

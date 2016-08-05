@@ -31,8 +31,8 @@ import (
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/kubelet"
 	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/intstr"
+	"k8s.io/kubernetes/pkg/util/uuid"
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/watch"
 	"k8s.io/kubernetes/test/e2e/framework"
@@ -53,7 +53,7 @@ var (
 
 func runLivenessTest(c *client.Client, ns string, podDescr *api.Pod, expectNumRestarts int, timeout time.Duration) {
 	By(fmt.Sprintf("Creating pod %s in namespace %s", podDescr.Name, ns))
-	_, err := c.Pods(ns).Create(podDescr)
+	podDescr, err := c.Pods(ns).Create(podDescr)
 	framework.ExpectNoError(err, fmt.Sprintf("creating pod %s", podDescr.Name))
 
 	// At the end of the test, clean up by removing the pod.
@@ -65,7 +65,7 @@ func runLivenessTest(c *client.Client, ns string, podDescr *api.Pod, expectNumRe
 	// Wait until the pod is not pending. (Here we need to check for something other than
 	// 'Pending' other than checking for 'Running', since when failures occur, we go to
 	// 'Terminated' which can cause indefinite blocking.)
-	framework.ExpectNoError(framework.WaitForPodNotPending(c, ns, podDescr.Name),
+	framework.ExpectNoError(framework.WaitForPodNotPending(c, ns, podDescr.Name, podDescr.ResourceVersion),
 		fmt.Sprintf("starting pod %s in namespace %s", podDescr.Name, ns))
 	framework.Logf("Started pod %s in namespace %s", podDescr.Name, ns)
 
@@ -114,13 +114,14 @@ func testHostIP(c *client.Client, ns string, pod *api.Pod) {
 	podClient := c.Pods(ns)
 	By("creating pod")
 	defer podClient.Delete(pod.Name, api.NewDeleteOptions(0))
-	if _, err := podClient.Create(pod); err != nil {
+	pod, err := podClient.Create(pod)
+	if err != nil {
 		framework.Failf("Failed to create pod: %v", err)
 	}
 	By("ensuring that pod is running and has a hostIP")
 	// Wait for the pods to enter the running state. Waiting loops until the pods
 	// are running so non-running pods cause a timeout for this test.
-	err := framework.WaitForPodRunningInNamespace(c, pod.Name, ns)
+	err = framework.WaitForPodRunningInNamespace(c, pod)
 	Expect(err).NotTo(HaveOccurred())
 	// Try to make sure we get a hostIP for each pod.
 	hostIPTimeout := 2 * time.Minute
@@ -209,7 +210,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 	f := framework.NewDefaultFramework("pods")
 
 	It("should get a host IP [Conformance]", func() {
-		name := "pod-hostip-" + string(util.NewUUID())
+		name := "pod-hostip-" + string(uuid.NewUUID())
 		testHostIP(f.Client, f.Namespace.Name, &api.Pod{
 			ObjectMeta: api.ObjectMeta{
 				Name: name,
@@ -229,7 +230,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-update-" + string(util.NewUUID())
+		name := "pod-update-" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -266,7 +267,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-update-" + string(util.NewUUID())
+		name := "pod-update-" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -413,7 +414,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-update-" + string(util.NewUUID())
+		name := "pod-update-" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -481,7 +482,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-update-activedeadlineseconds-" + string(util.NewUUID())
+		name := "pod-update-activedeadlineseconds-" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -541,7 +542,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 	It("should contain environment variables for services [Conformance]", func() {
 		// Make a pod that will be a service.
 		// This pod serves its hostname via HTTP.
-		serverName := "server-envvars-" + string(util.NewUUID())
+		serverName := "server-envvars-" + string(uuid.NewUUID())
 		serverPod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
 				Name:   serverName,
@@ -596,7 +597,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		}
 
 		// Make a client pod that verifies that it has the service environment variables.
-		podName := "client-envvars-" + string(util.NewUUID())
+		podName := "client-envvars-" + string(uuid.NewUUID())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
 				Name:   podName,
@@ -630,7 +631,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-init-" + string(util.NewUUID())
+		name := "pod-init-" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -696,7 +697,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-init-" + string(util.NewUUID())
+		name := "pod-init-" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -766,7 +767,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-init-" + string(util.NewUUID())
+		name := "pod-init-" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -882,7 +883,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-init-" + string(util.NewUUID())
+		name := "pod-init-" + string(uuid.NewUUID())
 		value := strconv.Itoa(time.Now().Nanosecond())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
@@ -1141,7 +1142,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-exec-websocket-" + string(util.NewUUID())
+		name := "pod-exec-websocket-" + string(uuid.NewUUID())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
 				Name: name,
@@ -1220,7 +1221,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		podClient := f.Client.Pods(f.Namespace.Name)
 
 		By("creating the pod")
-		name := "pod-logs-websocket-" + string(util.NewUUID())
+		name := "pod-logs-websocket-" + string(uuid.NewUUID())
 		pod := &api.Pod{
 			ObjectMeta: api.ObjectMeta{
 				Name: name,

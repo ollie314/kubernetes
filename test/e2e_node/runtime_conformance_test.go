@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
-	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/kubelet/images"
+	"k8s.io/kubernetes/pkg/util/uuid"
 	"k8s.io/kubernetes/test/e2e/framework"
 
 	. "github.com/onsi/ginkgo"
@@ -246,7 +246,7 @@ while true; do sleep 1; done
 						RestartPolicy: api.RestartPolicyNever,
 					}
 					if testCase.secret {
-						secret.Name = "image-pull-secret-" + string(util.NewUUID())
+						secret.Name = "image-pull-secret-" + string(uuid.NewUUID())
 						By("create image pull secret")
 						_, err := f.Client.Secrets(f.Namespace.Name).Create(secret)
 						Expect(err).NotTo(HaveOccurred())
@@ -272,8 +272,8 @@ while true; do sleep 1; done
 						}
 						if testCase.waiting && status.State.Waiting != nil {
 							reason := status.State.Waiting.Reason
-							return reason == kubecontainer.ErrImagePull.Error() ||
-								reason == kubecontainer.ErrImagePullBackOff.Error(), nil
+							return reason == images.ErrImagePull.Error() ||
+								reason == images.ErrImagePullBackOff.Error(), nil
 
 						}
 						return false, nil
