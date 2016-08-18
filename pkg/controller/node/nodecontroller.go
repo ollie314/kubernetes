@@ -51,6 +51,10 @@ import (
 var (
 	ErrCloudInstance        = errors.New("cloud provider doesn't support instances.")
 	gracefulDeletionVersion = version.MustParse("v1.1.0")
+
+	// The minimum kubelet version for which the nodecontroller
+	// can safely flip pod.Status to NotReady.
+	podStatusReconciliationVersion = version.MustParse("v1.2.0")
 )
 
 const (
@@ -120,7 +124,6 @@ type NodeController struct {
 	// workers that evicts pods from unresponsive nodes.
 	zonePodEvictor         map[string]*RateLimitedTimedQueue
 	zoneTerminationEvictor map[string]*RateLimitedTimedQueue
-	evictionLimiterQPS     float32
 	podEvictionTimeout     time.Duration
 	// The maximum duration before a pod evicted from a node can be forcefully terminated.
 	maximumGracePeriod time.Duration
@@ -140,10 +143,14 @@ type NodeController struct {
 	forcefullyDeletePod        func(*api.Pod) error
 	nodeExistsInCloudProvider  func(string) (bool, error)
 	computeZoneStateFunc       func(nodeConditions []*api.NodeCondition) zoneState
-	enterPartialDisruptionFunc func(nodeNum int, defaultQPS float32) float32
-	enterFullDisruptionFunc    func(nodeNum int, defaultQPS float32) float32
+	enterPartialDisruptionFunc func(nodeNum int) float32
+	enterFullDisruptionFunc    func(nodeNum int) float32
 
-	zoneStates map[string]zoneState
+	zoneStates                  map[string]zoneState
+	evictionLimiterQPS          float32
+	secondaryEvictionLimiterQPS float32
+	largeClusterThreshold       int32
+	unhealthyZoneThreshold      float32
 
 	// internalPodInformer is used to hold a personal informer.  If we're using
 	// a normal shared informer, then the informer will be started for us.  If
@@ -163,6 +170,9 @@ func NewNodeController(
 	kubeClient clientset.Interface,
 	podEvictionTimeout time.Duration,
 	evictionLimiterQPS float32,
+	secondaryEvictionLimiterQPS float32,
+	largeClusterThreshold int32,
+	unhealthyZoneThreshold float32,
 	nodeMonitorGracePeriod time.Duration,
 	nodeStartupGracePeriod time.Duration,
 	nodeMonitorPeriod time.Duration,
@@ -195,31 +205,34 @@ func NewNodeController(
 	}
 
 	nc := &NodeController{
-		cloud:                      cloud,
-		knownNodeSet:               make(map[string]*api.Node),
-		kubeClient:                 kubeClient,
-		recorder:                   recorder,
-		podEvictionTimeout:         podEvictionTimeout,
-		maximumGracePeriod:         5 * time.Minute,
-		zonePodEvictor:             make(map[string]*RateLimitedTimedQueue),
-		zoneTerminationEvictor:     make(map[string]*RateLimitedTimedQueue),
-		nodeStatusMap:              make(map[string]nodeStatusData),
-		nodeMonitorGracePeriod:     nodeMonitorGracePeriod,
-		nodeMonitorPeriod:          nodeMonitorPeriod,
-		nodeStartupGracePeriod:     nodeStartupGracePeriod,
-		lookupIP:                   net.LookupIP,
-		now:                        unversioned.Now,
-		clusterCIDR:                clusterCIDR,
-		serviceCIDR:                serviceCIDR,
-		allocateNodeCIDRs:          allocateNodeCIDRs,
-		forcefullyDeletePod:        func(p *api.Pod) error { return forcefullyDeletePod(kubeClient, p) },
-		nodeExistsInCloudProvider:  func(nodeName string) (bool, error) { return nodeExistsInCloudProvider(cloud, nodeName) },
-		enterPartialDisruptionFunc: ReducedQPSFunc,
-		enterFullDisruptionFunc:    HealthyQPSFunc,
-		computeZoneStateFunc:       ComputeZoneState,
-		evictionLimiterQPS:         evictionLimiterQPS,
-		zoneStates:                 make(map[string]zoneState),
+		cloud:                       cloud,
+		knownNodeSet:                make(map[string]*api.Node),
+		kubeClient:                  kubeClient,
+		recorder:                    recorder,
+		podEvictionTimeout:          podEvictionTimeout,
+		maximumGracePeriod:          5 * time.Minute,
+		zonePodEvictor:              make(map[string]*RateLimitedTimedQueue),
+		zoneTerminationEvictor:      make(map[string]*RateLimitedTimedQueue),
+		nodeStatusMap:               make(map[string]nodeStatusData),
+		nodeMonitorGracePeriod:      nodeMonitorGracePeriod,
+		nodeMonitorPeriod:           nodeMonitorPeriod,
+		nodeStartupGracePeriod:      nodeStartupGracePeriod,
+		lookupIP:                    net.LookupIP,
+		now:                         unversioned.Now,
+		clusterCIDR:                 clusterCIDR,
+		serviceCIDR:                 serviceCIDR,
+		allocateNodeCIDRs:           allocateNodeCIDRs,
+		forcefullyDeletePod:         func(p *api.Pod) error { return forcefullyDeletePod(kubeClient, p) },
+		nodeExistsInCloudProvider:   func(nodeName string) (bool, error) { return nodeExistsInCloudProvider(cloud, nodeName) },
+		evictionLimiterQPS:          evictionLimiterQPS,
+		secondaryEvictionLimiterQPS: secondaryEvictionLimiterQPS,
+		largeClusterThreshold:       largeClusterThreshold,
+		unhealthyZoneThreshold:      unhealthyZoneThreshold,
+		zoneStates:                  make(map[string]zoneState),
 	}
+	nc.enterPartialDisruptionFunc = nc.ReducedQPSFunc
+	nc.enterFullDisruptionFunc = nc.HealthyQPSFunc
+	nc.computeZoneStateFunc = nc.ComputeZoneState
 
 	podInformer.AddEventHandler(framework.ResourceEventHandlerFuncs{
 		AddFunc:    nc.maybeDeleteTerminatingPod,
@@ -336,6 +349,9 @@ func NewNodeControllerFromClient(
 	kubeClient clientset.Interface,
 	podEvictionTimeout time.Duration,
 	evictionLimiterQPS float32,
+	secondaryEvictionLimiterQPS float32,
+	largeClusterThreshold int32,
+	unhealthyZoneThreshold float32,
 	nodeMonitorGracePeriod time.Duration,
 	nodeStartupGracePeriod time.Duration,
 	nodeMonitorPeriod time.Duration,
@@ -344,8 +360,9 @@ func NewNodeControllerFromClient(
 	nodeCIDRMaskSize int,
 	allocateNodeCIDRs bool) (*NodeController, error) {
 	podInformer := informers.NewPodInformer(kubeClient, controller.NoResyncPeriodFunc())
-	nc, err := NewNodeController(podInformer, cloud, kubeClient, podEvictionTimeout, evictionLimiterQPS, nodeMonitorGracePeriod,
-		nodeStartupGracePeriod, nodeMonitorPeriod, clusterCIDR, serviceCIDR, nodeCIDRMaskSize, allocateNodeCIDRs)
+	nc, err := NewNodeController(podInformer, cloud, kubeClient, podEvictionTimeout, evictionLimiterQPS, secondaryEvictionLimiterQPS,
+		largeClusterThreshold, unhealthyZoneThreshold, nodeMonitorGracePeriod, nodeStartupGracePeriod, nodeMonitorPeriod, clusterCIDR,
+		serviceCIDR, nodeCIDRMaskSize, allocateNodeCIDRs)
 	if err != nil {
 		return nil, err
 	}
@@ -386,14 +403,15 @@ func (nc *NodeController) Run(period time.Duration) {
 		defer nc.evictorLock.Unlock()
 		for k := range nc.zonePodEvictor {
 			nc.zonePodEvictor[k].Try(func(value TimedValue) (bool, time.Duration) {
-				remaining, err := deletePods(nc.kubeClient, nc.recorder, value.Value, nc.daemonSetStore)
+				nodeUid, _ := value.UID.(string)
+				remaining, err := deletePods(nc.kubeClient, nc.recorder, value.Value, nodeUid, nc.daemonSetStore)
 				if err != nil {
 					utilruntime.HandleError(fmt.Errorf("unable to evict node %q: %v", value.Value, err))
 					return false, 0
 				}
 
 				if remaining {
-					nc.zoneTerminationEvictor[k].Add(value.Value)
+					nc.zoneTerminationEvictor[k].Add(value.Value, value.UID)
 				}
 				return true, 0
 			})
@@ -407,7 +425,8 @@ func (nc *NodeController) Run(period time.Duration) {
 		defer nc.evictorLock.Unlock()
 		for k := range nc.zoneTerminationEvictor {
 			nc.zoneTerminationEvictor[k].Try(func(value TimedValue) (bool, time.Duration) {
-				completed, remaining, err := terminatePods(nc.kubeClient, nc.recorder, value.Value, value.AddedAt, nc.maximumGracePeriod)
+				nodeUid, _ := value.UID.(string)
+				completed, remaining, err := terminatePods(nc.kubeClient, nc.recorder, value.Value, nodeUid, value.AddedAt, nc.maximumGracePeriod)
 				if err != nil {
 					utilruntime.HandleError(fmt.Errorf("unable to terminate pods on node %q: %v", value.Value, err))
 					return false, 0
@@ -415,7 +434,7 @@ func (nc *NodeController) Run(period time.Duration) {
 
 				if completed {
 					glog.V(2).Infof("All pods terminated on %s", value.Value)
-					recordNodeEvent(nc.recorder, value.Value, api.EventTypeNormal, "TerminatedAllPods", fmt.Sprintf("Terminated all Pods on Node %s.", value.Value))
+					recordNodeEvent(nc.recorder, value.Value, nodeUid, api.EventTypeNormal, "TerminatedAllPods", fmt.Sprintf("Terminated all Pods on Node %s.", value.Value))
 					return true, 0
 				}
 
@@ -450,7 +469,7 @@ func (nc *NodeController) monitorNodeStatus() error {
 	added, deleted := nc.checkForNodeAddedDeleted(nodes)
 	for i := range added {
 		glog.V(1).Infof("NodeController observed a new Node: %#v", added[i].Name)
-		recordNodeEvent(nc.recorder, added[i].Name, api.EventTypeNormal, "RegisteredNode", fmt.Sprintf("Registered Node %v in NodeController", added[i].Name))
+		recordNodeEvent(nc.recorder, added[i].Name, string(added[i].UID), api.EventTypeNormal, "RegisteredNode", fmt.Sprintf("Registered Node %v in NodeController", added[i].Name))
 		nc.knownNodeSet[added[i].Name] = added[i]
 		// When adding new Nodes we need to check if new zone appeared, and if so add new evictor.
 		zone := utilnode.GetZoneKey(added[i])
@@ -468,7 +487,7 @@ func (nc *NodeController) monitorNodeStatus() error {
 
 	for i := range deleted {
 		glog.V(1).Infof("NodeController observed a Node deletion: %v", deleted[i].Name)
-		recordNodeEvent(nc.recorder, deleted[i].Name, api.EventTypeNormal, "RemovingNode", fmt.Sprintf("Removing Node %v from NodeController", deleted[i].Name))
+		recordNodeEvent(nc.recorder, deleted[i].Name, string(deleted[i].UID), api.EventTypeNormal, "RemovingNode", fmt.Sprintf("Removing Node %v from NodeController", deleted[i].Name))
 		nc.evictPods(deleted[i])
 		delete(nc.knownNodeSet, deleted[i].Name)
 	}
@@ -525,7 +544,7 @@ func (nc *NodeController) monitorNodeStatus() error {
 			// Report node event.
 			if currentReadyCondition.Status != api.ConditionTrue && observedReadyCondition.Status == api.ConditionTrue {
 				recordNodeStatusChange(nc.recorder, node, "NodeNotReady")
-				if err = markAllPodsNotReady(nc.kubeClient, node.Name); err != nil {
+				if err = markAllPodsNotReady(nc.kubeClient, node); err != nil {
 					utilruntime.HandleError(fmt.Errorf("Unable to mark all pods NotReady on node %v: %v", node.Name, err))
 				}
 			}
@@ -540,7 +559,7 @@ func (nc *NodeController) monitorNodeStatus() error {
 				}
 				if !exists {
 					glog.V(2).Infof("Deleting node (no longer present in cloud provider): %s", node.Name)
-					recordNodeEvent(nc.recorder, node.Name, api.EventTypeNormal, "DeletingNode", fmt.Sprintf("Deleting Node %v because it's not present according to cloud provider", node.Name))
+					recordNodeEvent(nc.recorder, node.Name, string(node.UID), api.EventTypeNormal, "DeletingNode", fmt.Sprintf("Deleting Node %v because it's not present according to cloud provider", node.Name))
 					go func(nodeName string) {
 						defer utilruntime.HandleCrash()
 						// Kubelet is not reporting and Cloud Provider says node
@@ -648,14 +667,14 @@ func (nc *NodeController) setLimiterInZone(zone string, zoneSize int, state zone
 		nc.zoneTerminationEvictor[zone].SwapLimiter(nc.evictionLimiterQPS)
 	case statePartialDisruption:
 		nc.zonePodEvictor[zone].SwapLimiter(
-			nc.enterPartialDisruptionFunc(zoneSize, nc.evictionLimiterQPS))
+			nc.enterPartialDisruptionFunc(zoneSize))
 		nc.zoneTerminationEvictor[zone].SwapLimiter(
-			nc.enterPartialDisruptionFunc(zoneSize, nc.evictionLimiterQPS))
+			nc.enterPartialDisruptionFunc(zoneSize))
 	case stateFullDisruption:
 		nc.zonePodEvictor[zone].SwapLimiter(
-			nc.enterFullDisruptionFunc(zoneSize, nc.evictionLimiterQPS))
+			nc.enterFullDisruptionFunc(zoneSize))
 		nc.zoneTerminationEvictor[zone].SwapLimiter(
-			nc.enterFullDisruptionFunc(zoneSize, nc.evictionLimiterQPS))
+			nc.enterFullDisruptionFunc(zoneSize))
 	}
 }
 
@@ -867,5 +886,43 @@ func (nc *NodeController) cancelPodEviction(node *api.Node) bool {
 func (nc *NodeController) evictPods(node *api.Node) bool {
 	nc.evictorLock.Lock()
 	defer nc.evictorLock.Unlock()
-	return nc.zonePodEvictor[utilnode.GetZoneKey(node)].Add(node.Name)
+	return nc.zonePodEvictor[utilnode.GetZoneKey(node)].Add(node.Name, string(node.UID))
+}
+
+// Default value for cluster eviction rate - we take nodeNum for consistency with ReducedQPSFunc.
+func (nc *NodeController) HealthyQPSFunc(nodeNum int) float32 {
+	return nc.evictionLimiterQPS
+}
+
+// If the cluster is large make evictions slower, if they're small stop evictions altogether.
+func (nc *NodeController) ReducedQPSFunc(nodeNum int) float32 {
+	if int32(nodeNum) > nc.largeClusterThreshold {
+		return nc.secondaryEvictionLimiterQPS
+	}
+	return 0
+}
+
+// This function is expected to get a slice of NodeReadyConditions for all Nodes in a given zone.
+// The zone is considered:
+// - fullyDisrupted if there're no Ready Nodes,
+// - partiallyDisrupted if at least than nc.unhealthyZoneThreshold percent of Nodes are not Ready,
+// - normal otherwise
+func (nc *NodeController) ComputeZoneState(nodeReadyConditions []*api.NodeCondition) zoneState {
+	readyNodes := 0
+	notReadyNodes := 0
+	for i := range nodeReadyConditions {
+		if nodeReadyConditions[i] != nil && nodeReadyConditions[i].Status == api.ConditionTrue {
+			readyNodes++
+		} else {
+			notReadyNodes++
+		}
+	}
+	switch {
+	case readyNodes == 0 && notReadyNodes > 0:
+		return stateFullDisruption
+	case notReadyNodes > 2 && float32(notReadyNodes)/float32(notReadyNodes+readyNodes) >= nc.unhealthyZoneThreshold:
+		return statePartialDisruption
+	default:
+		return stateNormal
+	}
 }

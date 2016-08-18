@@ -29,10 +29,10 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	fed_v1b1 "k8s.io/kubernetes/federation/apis/federation/v1beta1"
+	"k8s.io/kubernetes/federation/cmd/federation-apiserver/app/options"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
 	ext_v1b1 "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
-	"k8s.io/kubernetes/pkg/genericapiserver/options"
 )
 
 func TestLongRunningRequestRegexp(t *testing.T) {
@@ -88,7 +88,7 @@ func TestRun(t *testing.T) {
 	s.InsecurePort = insecurePort
 	_, ipNet, _ := net.ParseCIDR("10.10.10.0/24")
 	s.ServiceClusterIPRange = *ipNet
-	s.StorageConfig.ServerList = []string{"http://localhost:4001"}
+	s.StorageConfig.ServerList = []string{"http://localhost:2379"}
 	go func() {
 		if err := Run(s); err != nil {
 			t.Fatalf("Error in bringing up the server: %v", err)
@@ -258,6 +258,8 @@ func testFederationResourceList(t *testing.T) {
 	}
 	assert.Equal(t, "v1", apiResourceList.APIVersion)
 	assert.Equal(t, fed_v1b1.SchemeGroupVersion.String(), apiResourceList.GroupVersion)
+	// Assert that there are exactly 2 resources.
+	assert.Equal(t, 2, len(apiResourceList.APIResources))
 
 	found := findResource(apiResourceList.APIResources, "clusters")
 	assert.NotNil(t, found)
@@ -280,11 +282,32 @@ func testCoreResourceList(t *testing.T) {
 	}
 	assert.Equal(t, "", apiResourceList.APIVersion)
 	assert.Equal(t, v1.SchemeGroupVersion.String(), apiResourceList.GroupVersion)
+	// Assert that there are exactly 6 resources.
+	assert.Equal(t, 6, len(apiResourceList.APIResources))
 
+	// Verify services.
 	found := findResource(apiResourceList.APIResources, "services")
 	assert.NotNil(t, found)
 	assert.True(t, found.Namespaced)
 	found = findResource(apiResourceList.APIResources, "services/status")
+	assert.NotNil(t, found)
+	assert.True(t, found.Namespaced)
+
+	// Verify namespaces.
+	found = findResource(apiResourceList.APIResources, "namespaces")
+	assert.NotNil(t, found)
+	assert.False(t, found.Namespaced)
+	found = findResource(apiResourceList.APIResources, "namespaces/status")
+	assert.NotNil(t, found)
+	assert.False(t, found.Namespaced)
+
+	// Verify events.
+	found = findResource(apiResourceList.APIResources, "events")
+	assert.NotNil(t, found)
+	assert.True(t, found.Namespaced)
+
+	// Verify secrets.
+	found = findResource(apiResourceList.APIResources, "secrets")
 	assert.NotNil(t, found)
 	assert.True(t, found.Namespaced)
 }
@@ -303,7 +326,10 @@ func testExtensionsResourceList(t *testing.T) {
 	// empty APIVersion for extensions group
 	assert.Equal(t, "", apiResourceList.APIVersion)
 	assert.Equal(t, ext_v1b1.SchemeGroupVersion.String(), apiResourceList.GroupVersion)
+	// Assert that there are exactly 5 resources.
+	assert.Equal(t, 5, len(apiResourceList.APIResources))
 
+	// Verify replicasets.
 	found := findResource(apiResourceList.APIResources, "replicasets")
 	assert.NotNil(t, found)
 	assert.True(t, found.Namespaced)
@@ -311,6 +337,14 @@ func testExtensionsResourceList(t *testing.T) {
 	assert.NotNil(t, found)
 	assert.True(t, found.Namespaced)
 	found = findResource(apiResourceList.APIResources, "replicasets/scale")
+	assert.NotNil(t, found)
+	assert.True(t, found.Namespaced)
+
+	// Verify ingress.
+	found = findResource(apiResourceList.APIResources, "ingresses")
+	assert.NotNil(t, found)
+	assert.True(t, found.Namespaced)
+	found = findResource(apiResourceList.APIResources, "ingresses/status")
 	assert.NotNil(t, found)
 	assert.True(t, found.Namespaced)
 }

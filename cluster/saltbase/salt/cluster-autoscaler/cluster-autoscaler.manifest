@@ -25,11 +25,11 @@
         "containers": [
             {
                 "name": "cluster-autoscaler",
-                "image": "gcr.io/google_containers/cluster-autoscaler:v0.2.2",
+                "image": "gcr.io/google_containers/cluster-autoscaler:v0.3.0-beta1",
                 "command": [
                     "/bin/sh",
                     "-c",
-                    "./cluster-autoscaler --kubernetes=http://127.0.0.1:8080?inClusterConfig=f -v=4 {{params}} 1>>/var/log/cluster-autoscaler.log 2>&1"
+                    "./cluster-autoscaler --kubernetes=http://127.0.0.1:8080?inClusterConfig=f --v=4 {{params}} 1>>/var/log/cluster-autoscaler.log 2>&1"
                 ],
                 "resources": {
                     "limits": {

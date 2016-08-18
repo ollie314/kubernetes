@@ -157,6 +157,59 @@ func TestContainerNaming(t *testing.T) {
 	}
 }
 
+func TestMatchImageTagOrSHA(t *testing.T) {
+	for _, testCase := range []struct {
+		Inspected dockertypes.ImageInspect
+		Image     string
+		Output    bool
+	}{
+		{
+			Inspected: dockertypes.ImageInspect{RepoTags: []string{"ubuntu:latest"}},
+			Image:     "ubuntu",
+			Output:    true,
+		},
+		{
+			Inspected: dockertypes.ImageInspect{RepoTags: []string{"ubuntu:14.04"}},
+			Image:     "ubuntu:latest",
+			Output:    false,
+		},
+		{
+			Inspected: dockertypes.ImageInspect{RepoTags: []string{"colemickens/hyperkube-amd64:217.9beff63"}},
+			Image:     "colemickens/hyperkube-amd64:217.9beff63",
+			Output:    true,
+		},
+		{
+			Inspected: dockertypes.ImageInspect{RepoTags: []string{"colemickens/hyperkube-amd64:217.9beff63"}},
+			Image:     "docker.io/colemickens/hyperkube-amd64:217.9beff63",
+			Output:    true,
+		},
+		{
+			Inspected: dockertypes.ImageInspect{
+				ID: "sha256:2208f7a29005d226d1ee33a63e33af1f47af6156c740d7d23c7948e8d282d53d",
+			},
+			Image:  "myimage@sha256:2208f7a29005d226d1ee33a63e33af1f47af6156c740d7d23c7948e8d282d53d",
+			Output: true,
+		},
+		{
+			Inspected: dockertypes.ImageInspect{
+				ID: "sha256:2208f7a29005d226d1ee33a63e33af1f47af6156c740d7d23c7948e8d282d53d",
+			},
+			Image:  "myimage@sha256:2208f7a29005",
+			Output: false,
+		},
+		{
+			Inspected: dockertypes.ImageInspect{
+				ID: "sha256:2208f7a29005d226d1ee33a63e33af1f47af6156c740d7d23c7948e8d282d53d",
+			},
+			Image:  "myimage@sha256:2208",
+			Output: false,
+		},
+	} {
+		match := matchImageTagOrSHA(testCase.Inspected, testCase.Image)
+		assert.Equal(t, testCase.Output, match, testCase.Image+" is not a match")
+	}
+}
+
 func TestApplyDefaultImageTag(t *testing.T) {
 	for _, testCase := range []struct {
 		Input  string
@@ -277,25 +330,33 @@ func TestPullWithSecrets(t *testing.T) {
 		"default keyring secrets": {
 			"ubuntu",
 			[]api.Secret{},
-			credentialprovider.DockerConfig(map[string]credentialprovider.DockerConfigEntry{"index.docker.io/v1/": {"built-in", "password", "email", nil}}),
+			credentialprovider.DockerConfig(map[string]credentialprovider.DockerConfigEntry{
+				"index.docker.io/v1/": {Username: "built-in", Password: "password", Email: "email", Provider: nil},
+			}),
 			[]string{`ubuntu:latest using {"username":"built-in","password":"password","email":"email"}`},
 		},
 		"default keyring secrets unused": {
 			"ubuntu",
 			[]api.Secret{},
-			credentialprovider.DockerConfig(map[string]credentialprovider.DockerConfigEntry{"extraneous": {"built-in", "password", "email", nil}}),
+			credentialprovider.DockerConfig(map[string]credentialprovider.DockerConfigEntry{
+				"extraneous": {Username: "built-in", Password: "password", Email: "email", Provider: nil},
+			}),
 			[]string{`ubuntu:latest using {}`},
 		},
 		"builtin keyring secrets, but use passed": {
 			"ubuntu",
 			[]api.Secret{{Type: api.SecretTypeDockercfg, Data: map[string][]byte{api.DockerConfigKey: dockercfgContent}}},
-			credentialprovider.DockerConfig(map[string]credentialprovider.DockerConfigEntry{"index.docker.io/v1/": {"built-in", "password", "email", nil}}),
+			credentialprovider.DockerConfig(map[string]credentialprovider.DockerConfigEntry{
+				"index.docker.io/v1/": {Username: "built-in", Password: "password", Email: "email", Provider: nil},
+			}),
 			[]string{`ubuntu:latest using {"username":"passed-user","password":"passed-password","email":"passed-email"}`},
 		},
 		"builtin keyring secrets, but use passed with new docker config": {
 			"ubuntu",
 			[]api.Secret{{Type: api.SecretTypeDockerConfigJson, Data: map[string][]byte{api.DockerConfigJsonKey: dockerConfigJsonContent}}},
-			credentialprovider.DockerConfig(map[string]credentialprovider.DockerConfigEntry{"index.docker.io/v1/": {"built-in", "password", "email", nil}}),
+			credentialprovider.DockerConfig(map[string]credentialprovider.DockerConfigEntry{
+				"index.docker.io/v1/": {Username: "built-in", Password: "password", Email: "email", Provider: nil},
+			}),
 			[]string{`ubuntu:latest using {"username":"passed-user","password":"passed-password","email":"passed-email"}`},
 		},
 	}

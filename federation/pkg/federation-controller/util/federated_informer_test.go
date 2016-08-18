@@ -105,7 +105,7 @@ func TestFederatedInformer(t *testing.T) {
 		},
 	}
 
-	informer := NewFederatedInformer(fakeClient, targetInformerFactory, lifecycle).(*federatedInformerImpl)
+	informer := NewFederatedInformer(fakeClient, targetInformerFactory, &lifecycle).(*federatedInformerImpl)
 	informer.clientFactory = func(cluster *federation_api.Cluster) (federation_release_1_4.Interface, error) {
 		return fakeClient, nil
 	}
@@ -121,7 +121,8 @@ func TestFederatedInformer(t *testing.T) {
 	assert.Contains(t, readyClusters, &cluster)
 	serviceList, err := informer.GetTargetStore().List()
 	assert.NoError(t, err)
-	assert.Contains(t, serviceList, &service)
+	federatedService := FederatedObject{ClusterName: "mycluster", Object: &service}
+	assert.Contains(t, serviceList, federatedService)
 	service1, found, err := informer.GetTargetStore().GetByKey("mycluster", "ns1/s1")
 	assert.NoError(t, err)
 	assert.True(t, found)

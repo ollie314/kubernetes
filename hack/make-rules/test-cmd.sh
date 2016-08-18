@@ -110,7 +110,7 @@ function kubectl-with-retry()
 {
   ERROR_FILE="${KUBE_TEMP}/kubectl-error"
   preserve_err_file=${PRESERVE_ERR_FILE-false}
-  for count in $(seq 0 3); do
+  for count in {0..3}; do
     kubectl "$@" 2> ${ERROR_FILE} || true
     if grep -q "the object has been modified" "${ERROR_FILE}"; then
       kube::log::status "retry $1, error: $(cat ${ERROR_FILE})"
@@ -138,7 +138,7 @@ make -C "${KUBE_ROOT}" WHAT="${BINS[*]}"
 kube::etcd::start
 
 ETCD_HOST=${ETCD_HOST:-127.0.0.1}
-ETCD_PORT=${ETCD_PORT:-4001}
+ETCD_PORT=${ETCD_PORT:-2379}
 API_PORT=${API_PORT:-8080}
 API_HOST=${API_HOST:-127.0.0.1}
 KUBELET_PORT=${KUBELET_PORT:-10250}
@@ -694,7 +694,7 @@ runTests() {
   ## If the resourceVersion is the same as the one stored in the server, the patch will be applied.
   # Command
   # Needs to retry because other party may change the resource.
-  for count in $(seq 0 3); do
+  for count in {0..3}; do
     resourceVersion=$(kubectl get "${kube_flags[@]}" pod valid-pod -o go-template='{{ .metadata.resourceVersion }}')
     kubectl patch "${kube_flags[@]}" pod valid-pod -p='{"spec":{"containers":[{"name": "kubernetes-serve-hostname", "image": "nginx"}]},"metadata":{"resourceVersion":"'$resourceVersion'"}}' 2> "${ERROR_FILE}" || true
     if grep -q "the object has been modified" "${ERROR_FILE}"; then
@@ -1036,14 +1036,39 @@ __EOF__
   # Post-Condition: assertion object exist
   kube::test::get_object_assert thirdpartyresources "{{range.items}}{{$id_field}}:{{end}}" 'foo.company.com:'
 
+  kubectl "${kube_flags[@]}" create -f - "${kube_flags[@]}" << __EOF__
+{
+  "kind": "ThirdPartyResource",
+  "apiVersion": "extensions/v1beta1",
+  "metadata": {
+    "name": "bar.company.com"
+  },
+  "versions": [
+    {
+      "name": "v1"
+    }
+  ]
+}
+__EOF__
+  
+  # Post-Condition: assertion object exist
+  kube::test::get_object_assert thirdpartyresources "{{range.items}}{{$id_field}}:{{end}}" 'bar.company.com:foo.company.com:'
+
   kube::util::wait_for_url "http://127.0.0.1:${API_PORT}/apis/company.com/v1" "third party api"
 
-  # Test that we can list this new third party resource
+  kube::util::wait_for_url "http://127.0.0.1:${API_PORT}/apis/company.com/v1/foos" "third party api Foo"
+
+  kube::util::wait_for_url "http://127.0.0.1:${API_PORT}/apis/company.com/v1/bars" "third party api Bar"
+
+  # Test that we can list this new third party resource (foos)
   kube::test::get_object_assert foos "{{range.items}}{{$id_field}}:{{end}}" ''
 
+  # Test that we can list this new third party resource (bars)
+  kube::test::get_object_assert bars "{{range.items}}{{$id_field}}:{{end}}" ''
+
   # Test that we can create a new resource of type Foo
- kubectl "${kube_flags[@]}" create -f - "${kube_flags[@]}" << __EOF__
- {
+  kubectl "${kube_flags[@]}" create -f - "${kube_flags[@]}" << __EOF__
+{
   "kind": "Foo",
   "apiVersion": "company.com/v1",
   "metadata": {
@@ -1063,8 +1088,43 @@ __EOF__
   # Make sure it's gone
   kube::test::get_object_assert foos "{{range.items}}{{$id_field}}:{{end}}" ''
 
+  # Test that we can create a new resource of type Bar
+  kubectl "${kube_flags[@]}" create -f - "${kube_flags[@]}" << __EOF__
+{
+  "kind": "Bar",
+  "apiVersion": "company.com/v1",
+  "metadata": {
+    "name": "test"
+  },
+  "some-field": "field1",
+  "other-field": "field2"
+}
+__EOF__
+
+  # Test that we can list this new third party resource
+  kube::test::get_object_assert bars "{{range.items}}{{$id_field}}:{{end}}" 'test:'
+
+  # Delete the resource
+  kubectl "${kube_flags[@]}" delete bars test
+
+  # Make sure it's gone
+  kube::test::get_object_assert bars "{{range.items}}{{$id_field}}:{{end}}" ''
+
   # teardown
   kubectl delete thirdpartyresources foo.company.com "${kube_flags[@]}"
+  kubectl delete thirdpartyresources bar.company.com "${kube_flags[@]}"
+
+  #################
+  # Run cmd w img #
+  #################
+
+  # Test that a valid image reference value is provided as the value of --image in `kubectl run <name> --image`
+  output_message=$(kubectl run test1 --image=validname)
+  kube::test::if_has_string "${output_message}" 'deployment "test1" created'
+  # test invalid image name
+  output_message=$(! kubectl run test2 --image=InvalidImageName 2>&1)
+  kube::test::if_has_string "${output_message}" 'error: Invalid image name "InvalidImageName": invalid reference format'
+
 
   #####################################
   # Recursive Resources via directory #
@@ -1782,7 +1842,7 @@ __EOF__
   kube::test::if_has_string "${output_message}" '\"etcd-server\" exposed'
   # Post-condition: generated service has both ports from the exposed pod
   kube::test::get_object_assert 'service etcd-server' "{{$port_name}} {{$port_field}}" 'port-1 2380'
-  kube::test::get_object_assert 'service etcd-server' "{{$second_port_name}} {{$second_port_field}}" 'port-2 4001'
+  kube::test::get_object_assert 'service etcd-server' "{{$second_port_name}} {{$second_port_field}}" 'port-2 2379'
   # Clean-up
   kubectl delete svc etcd-server "${kube_flags[@]}"
 
@@ -2327,6 +2387,26 @@ __EOF__
   # but it proves that works
   kubectl create -f test/fixtures/pkg/kubectl/cmd/create/tokenreview.json --validate=false
 
+
+
+  ########################
+  # authorization.k8s.io #
+  ########################
+
+  # check remote authorization endpoint, kubectl doesn't actually display the returned object so this isn't super useful
+  # but it proves that works
+  kubectl create -f test/fixtures/pkg/kubectl/cmd/create/sar.json --validate=false
+
+  SAR_RESULT_FILE="${KUBE_TEMP}/sar-result.json"
+  curl -k -H "Content-Type:" http://localhost:8080/apis/authorization.k8s.io/v1beta1/subjectaccessreviews -XPOST -d @test/fixtures/pkg/kubectl/cmd/create/sar.json > "${SAR_RESULT_FILE}"
+  if grep -q '"allowed": true' "${SAR_RESULT_FILE}"; then
+    kube::log::status "\"authorization.k8s.io/subjectaccessreviews\" returns as expected: $(cat "${SAR_RESULT_FILE}")"
+  else
+    kube::log::status "\"authorization.k8s.io/subjectaccessreviews\" does not return as expected: $(cat "${SAR_RESULT_FILE}")"
+    exit 1
+  fi
+  rm "${SAR_RESULT_FILE}"
+ 
 
   #####################
   # Retrieve multiple #

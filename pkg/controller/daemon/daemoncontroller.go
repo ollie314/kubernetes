@@ -354,16 +354,17 @@ func (dsc *DaemonSetsController) addPod(obj interface{}) {
 // up. If the labels of the pod have changed we need to awaken both the old
 // and new set. old and cur must be *api.Pod types.
 func (dsc *DaemonSetsController) updatePod(old, cur interface{}) {
-	if api.Semantic.DeepEqual(old, cur) {
-		// A periodic relist will send update events for all known pods.
+	curPod := cur.(*api.Pod)
+	oldPod := old.(*api.Pod)
+	if curPod.ResourceVersion == oldPod.ResourceVersion {
+		// Periodic resync will send update events for all known pods.
+		// Two different versions of the same pod will always have different RVs.
 		return
 	}
-	curPod := cur.(*api.Pod)
 	glog.V(4).Infof("Pod %s updated.", curPod.Name)
 	if curDS := dsc.getPodDaemonSet(curPod); curDS != nil {
 		dsc.enqueueDaemonSet(curDS)
 	}
-	oldPod := old.(*api.Pod)
 	// If the labels have not changed, then the daemon set responsible for
 	// the pod is the same as it was before. In that case we have enqueued the daemon
 	// set above, and do not have to enqueue the set again.
@@ -427,8 +428,8 @@ func (dsc *DaemonSetsController) addNode(obj interface{}) {
 func (dsc *DaemonSetsController) updateNode(old, cur interface{}) {
 	oldNode := old.(*api.Node)
 	curNode := cur.(*api.Node)
-	if api.Semantic.DeepEqual(oldNode.Name, curNode.Name) && api.Semantic.DeepEqual(oldNode.Namespace, curNode.Namespace) && api.Semantic.DeepEqual(oldNode.Labels, curNode.Labels) {
-		// A periodic relist will send update events for all known pods.
+	if reflect.DeepEqual(oldNode.Labels, curNode.Labels) {
+		// If node labels didn't change, we can ignore this update.
 		return
 	}
 	dsList, err := dsc.dsStore.List()
@@ -693,7 +694,7 @@ func (dsc *DaemonSetsController) nodeShouldRunDaemonPod(node *api.Node, ds *exte
 		if pod.Status.Phase == api.PodSucceeded || pod.Status.Phase == api.PodFailed {
 			continue
 		}
-		// ignore pods that belong to the daemonset when taking into account wheter
+		// ignore pods that belong to the daemonset when taking into account whether
 		// a daemonset should bind to a node.
 		if pds := dsc.getPodDaemonSet(pod); pds != nil && ds.Name == pds.Name {
 			continue
@@ -703,18 +704,12 @@ func (dsc *DaemonSetsController) nodeShouldRunDaemonPod(node *api.Node, ds *exte
 
 	nodeInfo := schedulercache.NewNodeInfo(pods...)
 	nodeInfo.SetNode(node)
-	fit, err := predicates.GeneralPredicates(newPod, nil, nodeInfo)
+	fit, reasons, err := predicates.GeneralPredicates(newPod, nil, nodeInfo)
 	if err != nil {
-		if re, ok := err.(*predicates.PredicateFailureError); ok {
-			message := re.Error()
-			glog.V(2).Infof("Predicate failed on Pod: %s, for reason: %v", newPod.Name, message)
-		}
-		if re, ok := err.(*predicates.InsufficientResourceError); ok {
-			message := re.Error()
-			glog.V(2).Infof("Predicate failed on Pod: %s, for reason: %v", newPod.Name, message)
-		}
-		message := fmt.Sprintf("GeneralPredicates failed due to %v.", err)
-		glog.Warningf("Predicate failed on Pod %s - %s", newPod.Name, message)
+		glog.Warningf("GeneralPredicates failed on pod %s due to unexpected error: %v", newPod.Name, err)
+	}
+	for _, r := range reasons {
+		glog.V(2).Infof("GeneralPredicates failed on pod %s for reason: %v", newPod.Name, r.GetReason())
 	}
 	return fit
 }

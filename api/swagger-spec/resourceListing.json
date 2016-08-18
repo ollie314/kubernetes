@@ -2,6 +2,10 @@
   "swaggerVersion": "1.2",
   "apis": [
    {
+    "path": "/logs",
+    "description": "get log files"
+   },
+   {
     "path": "/version",
     "description": "git code version from which this is built"
    },
@@ -31,6 +35,14 @@
    },
    {
     "path": "/apis/authentication.k8s.io",
+    "description": "get information of a group"
+   },
+   {
+    "path": "/apis/authorization.k8s.io/v1beta1",
+    "description": "API at /apis/authorization.k8s.io/v1beta1"
+   },
+   {
+    "path": "/apis/authorization.k8s.io",
     "description": "get information of a group"
    },
    {

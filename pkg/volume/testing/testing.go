@@ -127,6 +127,10 @@ func (f *fakeVolumeHost) GetRootContext() string {
 	return f.rootContext
 }
 
+func (f *fakeVolumeHost) GetNodeAllocatable() (api.ResourceList, error) {
+	return api.ResourceList{}, nil
+}
+
 func ProbeVolumePlugins(config VolumeConfig) []VolumePlugin {
 	if _, ok := config.OtherAttributes["fake-property"]; ok {
 		return []VolumePlugin{
@@ -286,6 +290,14 @@ func (plugin *FakeVolumePlugin) NewProvisioner(options VolumeOptions) (Provision
 
 func (plugin *FakeVolumePlugin) GetAccessModes() []api.PersistentVolumeAccessMode {
 	return []api.PersistentVolumeAccessMode{}
+}
+
+func (plugin *FakeVolumePlugin) ConstructVolumeSpec(volumeName, mountPath string) (*Spec, error) {
+	return nil, nil
+}
+
+func (plugin *FakeVolumePlugin) GetDeviceMountRefs(deviceMountPath string) ([]string, error) {
+	return []string{}, nil
 }
 
 type FakeVolume struct {
@@ -721,9 +733,16 @@ func VerifyZeroDetachCallCount(fakeVolumePlugin *FakeVolumePlugin) error {
 // manager and fake volume plugin using a fake volume host.
 func GetTestVolumePluginMgr(
 	t *testing.T) (*VolumePluginMgr, *FakeVolumePlugin) {
+	v := NewFakeVolumeHost(
+		"",  /* rootDir */
+		nil, /* kubeClient */
+		nil, /* plugins */
+		"",  /* rootContext */
+	)
 	plugins := ProbeVolumePlugins(VolumeConfig{})
-	volumePluginMgr := NewFakeVolumeHost(
-		"" /* rootDir */, nil /* kubeClient */, plugins, "" /* rootContext */).pluginMgr
+	if err := v.pluginMgr.InitPlugins(plugins, v); err != nil {
+		t.Fatal(err)
+	}
 
-	return &volumePluginMgr, plugins[0].(*FakeVolumePlugin)
+	return &v.pluginMgr, plugins[0].(*FakeVolumePlugin)
 }

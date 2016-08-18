@@ -18,6 +18,7 @@ package podsecuritypolicy
 
 import (
 	"fmt"
+
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/apis/extensions"
@@ -55,10 +56,10 @@ func (strategy) AllowUnconditionalUpdate() bool {
 	return true
 }
 
-func (strategy) PrepareForCreate(obj runtime.Object) {
+func (strategy) PrepareForCreate(ctx api.Context, obj runtime.Object) {
 }
 
-func (strategy) PrepareForUpdate(obj, old runtime.Object) {
+func (strategy) PrepareForUpdate(ctx api.Context, obj, old runtime.Object) {
 }
 
 func (strategy) Canonicalize(obj runtime.Object) {

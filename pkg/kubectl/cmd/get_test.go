@@ -33,6 +33,7 @@ import (
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/restclient"
+	"k8s.io/kubernetes/pkg/client/typed/discovery"
 	"k8s.io/kubernetes/pkg/client/unversioned/fake"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/runtime/serializer"
@@ -89,6 +90,26 @@ func testData() (*api.PodList, *api.ServiceList, *api.ReplicationControllerList)
 	return pods, svc, rc
 }
 
+func testDynamicResources() []*discovery.APIGroupResources {
+	return []*discovery.APIGroupResources{
+		{
+			Group: unversioned.APIGroup{
+				Versions: []unversioned.GroupVersionForDiscovery{
+					{Version: "v1"},
+				},
+				PreferredVersion: unversioned.GroupVersionForDiscovery{Version: "v1"},
+			},
+			VersionedResources: map[string][]unversioned.APIResource{
+				"v1": {
+					{Name: "pods", Namespaced: true, Kind: "Pod"},
+					{Name: "services", Namespaced: true, Kind: "Service"},
+					{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
+				},
+			},
+		},
+	}
+}
+
 func testComponentStatusData() *api.ComponentStatusList {
 	good := api.ComponentStatus{
 		Conditions: []api.ComponentCondition{
@@ -127,8 +148,9 @@ func TestGetUnknownSchemaObject(t *testing.T) {
 	tf.Namespace = "test"
 	tf.ClientConfig = &restclient.Config{ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}}
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 	cmd.Run(cmd, []string{"type", "foo"})
 
@@ -203,12 +225,13 @@ func TestGetUnknownSchemaObjectListGeneric(t *testing.T) {
 		tf.Namespace = "test"
 		tf.ClientConfig = &restclient.Config{ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}}
 		buf := bytes.NewBuffer([]byte{})
-		cmd := NewCmdGet(f, buf)
+		errBuf := bytes.NewBuffer([]byte{})
+		cmd := NewCmdGet(f, buf, errBuf)
 		cmd.SetOutput(buf)
 		cmd.Flags().Set("output", "json")
 
 		cmd.Flags().Set("output-version", test.outputVersion)
-		err := RunGet(f, buf, cmd, []string{"type/foo", "replicationcontrollers/foo"}, &GetOptions{})
+		err := RunGet(f, buf, errBuf, cmd, []string{"type/foo", "replicationcontrollers/foo"}, &GetOptions{})
 		if err != nil {
 			t.Errorf("%s: unexpected error: %v", k, err)
 			continue
@@ -246,8 +269,9 @@ func TestGetSchemaObject(t *testing.T) {
 	tf.Namespace = "test"
 	tf.ClientConfig = &restclient.Config{ContentConfig: restclient.ContentConfig{GroupVersion: &unversioned.GroupVersion{Version: "v1"}}}
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.Run(cmd, []string{"replicationcontrollers", "foo"})
 
 	if !strings.Contains(buf.String(), "\"foo\"") {
@@ -266,8 +290,9 @@ func TestGetObjects(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 	cmd.Run(cmd, []string{"pods", "foo"})
 
@@ -312,7 +337,9 @@ func TestGetSortedObjects(t *testing.T) {
 	tf.ClientConfig = &restclient.Config{ContentConfig: restclient.ContentConfig{GroupVersion: &unversioned.GroupVersion{Version: "v1"}}}
 
 	buf := bytes.NewBuffer([]byte{})
-	cmd := NewCmdGet(f, buf)
+	errBuf := bytes.NewBuffer([]byte{})
+
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 
 	// sorting with metedata.name
@@ -342,8 +369,9 @@ func TestGetObjectsIdentifiedByFile(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 	cmd.Flags().Set("filename", "../../../examples/storage/cassandra/cassandra-controller.yaml")
 	cmd.Run(cmd, []string{})
@@ -369,8 +397,9 @@ func TestGetListObjects(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 	cmd.Run(cmd, []string{"pods"})
 
@@ -412,8 +441,9 @@ func TestGetAllListObjects(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 	cmd.Flags().Set("show-all", "true")
 	cmd.Run(cmd, []string{"pods"})
@@ -442,8 +472,9 @@ func TestGetListComponentStatus(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 	cmd.Run(cmd, []string{"componentstatuses"})
 
@@ -481,8 +512,9 @@ func TestGetMultipleTypeObjects(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 	cmd.Run(cmd, []string{"pods,services"})
 
@@ -521,8 +553,9 @@ func TestGetMultipleTypeObjectsAsList(t *testing.T) {
 	tf.Namespace = "test"
 	tf.ClientConfig = &restclient.Config{ContentConfig: restclient.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}}
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 
 	cmd.Flags().Set("output", "json")
@@ -583,8 +616,9 @@ func TestGetMultipleTypeObjectsWithSelector(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 
 	cmd.Flags().Set("selector", "a=b")
@@ -632,8 +666,9 @@ func TestGetMultipleTypeObjectsWithDirectReference(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 
 	cmd.Run(cmd, []string{"services/bar", "node/foo"})
@@ -659,8 +694,9 @@ func TestGetByNameForcesFlag(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 	cmd.Run(cmd, []string{"pods", "foo"})
 
@@ -770,8 +806,9 @@ func TestWatchSelector(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 
 	cmd.Flags().Set("watch", "true")
@@ -809,8 +846,9 @@ func TestWatchResource(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 
 	cmd.Flags().Set("watch", "true")
@@ -847,7 +885,9 @@ func TestWatchResourceIdentifiedByFile(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
-	cmd := NewCmdGet(f, buf)
+	errBuf := bytes.NewBuffer([]byte{})
+
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 
 	cmd.Flags().Set("watch", "true")
@@ -886,8 +926,9 @@ func TestWatchOnlyResource(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 
 	cmd.Flags().Set("watch-only", "true")
@@ -930,8 +971,9 @@ func TestWatchOnlyList(t *testing.T) {
 	}
 	tf.Namespace = "test"
 	buf := bytes.NewBuffer([]byte{})
+	errBuf := bytes.NewBuffer([]byte{})
 
-	cmd := NewCmdGet(f, buf)
+	cmd := NewCmdGet(f, buf, errBuf)
 	cmd.SetOutput(buf)
 
 	cmd.Flags().Set("watch-only", "true")

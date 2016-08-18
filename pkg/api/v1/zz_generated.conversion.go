@@ -29,7 +29,13 @@ import (
 )
 
 func init() {
-	if err := api.Scheme.AddGeneratedConversionFuncs(
+	SchemeBuilder.Register(RegisterConversions)
+}
+
+// RegisterConversions adds conversion functions to the given scheme.
+// Public to allow building arbitrary schemes.
+func RegisterConversions(scheme *runtime.Scheme) error {
+	return scheme.AddGeneratedConversionFuncs(
 		Convert_v1_AWSElasticBlockStoreVolumeSource_To_api_AWSElasticBlockStoreVolumeSource,
 		Convert_api_AWSElasticBlockStoreVolumeSource_To_v1_AWSElasticBlockStoreVolumeSource,
 		Convert_v1_Affinity_To_api_Affinity,
@@ -334,10 +340,7 @@ func init() {
 		Convert_api_VsphereVirtualDiskVolumeSource_To_v1_VsphereVirtualDiskVolumeSource,
 		Convert_v1_WeightedPodAffinityTerm_To_api_WeightedPodAffinityTerm,
 		Convert_api_WeightedPodAffinityTerm_To_v1_WeightedPodAffinityTerm,
-	); err != nil {
-		// if one of the conversion functions is malformed, detect it immediately.
-		panic(err)
-	}
+	)
 }
 
 func autoConvert_v1_AWSElasticBlockStoreVolumeSource_To_api_AWSElasticBlockStoreVolumeSource(in *AWSElasticBlockStoreVolumeSource, out *api.AWSElasticBlockStoreVolumeSource, s conversion.Scope) error {
@@ -1532,6 +1535,7 @@ func Convert_api_EmptyDirVolumeSource_To_v1_EmptyDirVolumeSource(in *api.EmptyDi
 func autoConvert_v1_EndpointAddress_To_api_EndpointAddress(in *EndpointAddress, out *api.EndpointAddress, s conversion.Scope) error {
 	out.IP = in.IP
 	out.Hostname = in.Hostname
+	out.NodeName = in.NodeName
 	if in.TargetRef != nil {
 		in, out := &in.TargetRef, &out.TargetRef
 		*out = new(api.ObjectReference)
@@ -1551,6 +1555,7 @@ func Convert_v1_EndpointAddress_To_api_EndpointAddress(in *EndpointAddress, out 
 func autoConvert_api_EndpointAddress_To_v1_EndpointAddress(in *api.EndpointAddress, out *EndpointAddress, s conversion.Scope) error {
 	out.IP = in.IP
 	out.Hostname = in.Hostname
+	out.NodeName = in.NodeName
 	if in.TargetRef != nil {
 		in, out := &in.TargetRef, &out.TargetRef
 		*out = new(ObjectReference)

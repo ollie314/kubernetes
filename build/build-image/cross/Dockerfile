@@ -66,10 +66,13 @@ ENV TMPDIR /tmp.k8s
 RUN mkdir $TMPDIR \
   && chmod a+rwx $TMPDIR \
   && chmod o+t $TMPDIR \
-  && go get golang.org/x/tools/cmd/cover github.com/tools/godep github.com/jteeuwen/go-bindata/go-bindata
+  && go get golang.org/x/tools/cmd/cover \
+            golang.org/x/tools/cmd/goimports \
+            github.com/tools/godep \
+            github.com/jteeuwen/go-bindata/go-bindata
 
 # Download and symlink etcd. We need this for our integration tests.
-RUN export ETCD_VERSION=v2.2.1; \
+RUN export ETCD_VERSION=v3.0.4; \
   mkdir -p /usr/local/src/etcd \
   && cd /usr/local/src/etcd \
   && curl -fsSL https://github.com/coreos/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz | tar -xz \

@@ -45,7 +45,7 @@ readonly KUBE_GCS_DELETE_EXISTING="${KUBE_GCS_DELETE_EXISTING:-n}"
 
 # Constants
 readonly KUBE_BUILD_IMAGE_REPO=kube-build
-readonly KUBE_BUILD_IMAGE_CROSS_TAG="v1.6.3-1"
+readonly KUBE_BUILD_IMAGE_CROSS_TAG="$(cat ${KUBE_ROOT}/build/build-image/cross/VERSION)"
 # KUBE_BUILD_DATA_CONTAINER_NAME=kube-build-data-<hash>"
 
 # Here we map the output directories across both the local and remote _output
@@ -67,15 +67,15 @@ readonly LOCAL_OUTPUT_IMAGE_STAGING="${LOCAL_OUTPUT_ROOT}/images"
 # This is a symlink to binaries for "this platform" (e.g. build tools).
 readonly THIS_PLATFORM_BIN="${LOCAL_OUTPUT_ROOT}/bin"
 
-readonly OUTPUT_BINPATH="${CUSTOM_OUTPUT_BINPATH:-$LOCAL_OUTPUT_BINPATH}"
-
 readonly REMOTE_OUTPUT_ROOT="/go/src/${KUBE_GO_PACKAGE}/_output"
 readonly REMOTE_OUTPUT_SUBPATH="${REMOTE_OUTPUT_ROOT}/dockerized"
 readonly REMOTE_OUTPUT_BINPATH="${REMOTE_OUTPUT_SUBPATH}/bin"
 readonly REMOTE_OUTPUT_GOPATH="${REMOTE_OUTPUT_SUBPATH}/go"
 
 readonly DOCKER_MOUNT_ARGS_BASE=(
-  --volume "${OUTPUT_BINPATH}:${REMOTE_OUTPUT_BINPATH}"
+  # where the container build will drop output
+  --volume "${LOCAL_OUTPUT_BINPATH}:${REMOTE_OUTPUT_BINPATH}"
+  # timezone
   --volume /etc/localtime:/etc/localtime:ro
 )
 
@@ -485,11 +485,6 @@ function kube::build::source_targets() {
           \( -path ./_\* -o -path ./.git\* \) -prune  \
         \))
   )
-  if [ -n "${KUBERNETES_CONTRIB:-}" ]; then
-    for contrib in "${KUBERNETES_CONTRIB}"; do
-      targets+=($(eval "kube::contrib::${contrib}::source_targets"))
-    done
-  fi
   echo "${targets[@]}"
 }
 
@@ -573,11 +568,12 @@ function kube::build::ensure_data_container() {
     # container and chowns the GOPATH.
     local -ra docker_cmd=(
       "${DOCKER[@]}" run
-      --volume "${REMOTE_OUTPUT_GOPATH}"
       --name "${KUBE_BUILD_DATA_CONTAINER_NAME}"
       --hostname "${HOSTNAME}"
+      --volume "${REMOTE_OUTPUT_ROOT}"   # white-out the whole output dir
+      --volume "${REMOTE_OUTPUT_GOPATH}" # make a non-root owned mountpoint
       "${KUBE_BUILD_IMAGE}"
-      chown -R $(id -u).$(id -g) "${REMOTE_OUTPUT_GOPATH}"
+      chown -R $(id -u).$(id -g) "${REMOTE_OUTPUT_ROOT}"
     )
     "${docker_cmd[@]}"
   fi

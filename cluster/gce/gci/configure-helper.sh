@@ -549,6 +549,10 @@ function prepare-etcd-manifest {
   mv "${temp_file}" /etc/kubernetes/manifests
 }
 
+function start-etcd-empty-dir-cleanup-pod {
+  cp "${KUBE_HOME}/kube-manifests/kubernetes/gci-trusty/etcd-empty-dir-cleanup/etcd-empty-dir-cleanup.yaml" "/etc/kubernetes/manifests"
+}
+
 # Starts etcd server pod (and etcd-events pod if needed).
 # More specifically, it prepares dirs and files, sets the variable value
 # in the manifests, and copies them to /etc/kubernetes/manifests.
@@ -567,7 +571,7 @@ function start-etcd-servers {
     rm -f /etc/init.d/etcd
   fi
   prepare-log-file /var/log/etcd.log
-  prepare-etcd-manifest "" "4001" "2380" "200m" "etcd.manifest"
+  prepare-etcd-manifest "" "2379" "2380" "200m" "etcd.manifest"
 
   prepare-log-file /var/log/etcd-events.log
   prepare-etcd-manifest "-events" "4002" "2381" "100m" "etcd-events.manifest"
@@ -626,14 +630,23 @@ function start-kube-apiserver {
   params+=" --basic-auth-file=/etc/srv/kubernetes/basic_auth.csv"
   params+=" --cloud-provider=gce"
   params+=" --client-ca-file=/etc/srv/kubernetes/ca.crt"
-  params+=" --etcd-servers=http://127.0.0.1:4001"
+  params+=" --etcd-servers=http://127.0.0.1:2379"
   params+=" --etcd-servers-overrides=/events#http://127.0.0.1:4002"
   params+=" --secure-port=443"
   params+=" --tls-cert-file=/etc/srv/kubernetes/server.cert"
   params+=" --tls-private-key-file=/etc/srv/kubernetes/server.key"
   params+=" --token-auth-file=/etc/srv/kubernetes/known_tokens.csv"
+  if [[ -n "${STORAGE_BACKEND:-}" ]]; then
+    params+=" --storage-backend=${STORAGE_BACKEND}"
+  fi
   if [[ -n "${ENABLE_GARBAGE_COLLECTOR:-}" ]]; then
     params+=" --enable-garbage-collector=${ENABLE_GARBAGE_COLLECTOR}"
+  fi
+  if [[ -n "${NUM_NODES:-}" ]]; then
+    # Set amount of memory available for apiserver based on number of nodes.
+    # TODO: Once we start setting proper requests and limits for apiserver
+    # we should reuse the same logic here instead of current heuristic.
+    params+=" --target-ram-mb=$((${NUM_NODES} * 60))"
   fi
   if [[ -n "${SERVICE_CLUSTER_IP_RANGE:-}" ]]; then
     params+=" --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE}"
@@ -932,6 +945,9 @@ function start-kube-addons {
   if echo "${ADMISSION_CONTROL:-}" | grep -q "LimitRanger"; then
     setup-addon-manifests "admission-controls" "limit-range"
   fi
+  if [[ "${NETWORK_POLICY_PROVIDER:-}" == "calico" ]]; then
+    setup-addon-manifests "addons" "calico-policy-controller"
+  fi
 
   # Place addon manager pod manifest.
   cp "${src_dir}/kube-addon-manager.yaml" /etc/kubernetes/manifests
@@ -1029,6 +1045,7 @@ start-kubelet
 if [[ "${KUBERNETES_MASTER:-}" == "true" ]]; then
   compute-master-manifest-variables
   start-etcd-servers
+  start-etcd-empty-dir-cleanup-pod
   start-kube-apiserver
   start-kube-controller-manager
   start-kube-scheduler

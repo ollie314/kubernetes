@@ -558,6 +558,9 @@ message EndpointAddress {
   // The Hostname of this endpoint
   optional string hostname = 3;
 
+  // Optional: Node hosting this endpoint. This can be used to determine endpoints local to a node.
+  optional string nodeName = 4;
+
   // Reference to object providing the endpoint.
   optional ObjectReference targetRef = 2;
 }
@@ -1301,6 +1304,7 @@ message NodeStatus {
 
   // NodePhase is the recently observed lifecycle phase of the node.
   // More info: http://releases.k8s.io/HEAD/docs/admin/node.md#node-phase
+  // The field is never populated, and now is deprecated.
   optional string phase = 3;
 
   // Conditions is an array of current observed node conditions.
@@ -1475,7 +1479,6 @@ message ObjectMeta {
   // (scope and select) objects. May match selectors of replication controllers
   // and services.
   // More info: http://releases.k8s.io/HEAD/docs/user-guide/labels.md
-  // TODO: replace map[string]string with labels.LabelSet type
   map<string, string> labels = 11;
 
   // Annotations is an unstructured key value map stored with a resource that may be
@@ -2473,13 +2476,13 @@ message ResourceQuotaStatus {
 // ResourceRequirements describes the compute resource requirements.
 message ResourceRequirements {
   // Limits describes the maximum amount of compute resources allowed.
-  // More info: http://releases.k8s.io/HEAD/docs/design/resources.md#resource-specifications
+  // More info: http://kubernetes.io/docs/user-guide/compute-resources/
   map<string, k8s.io.kubernetes.pkg.api.resource.Quantity> limits = 1;
 
   // Requests describes the minimum amount of compute resources required.
   // If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
   // otherwise to an implementation-defined value.
-  // More info: http://releases.k8s.io/HEAD/docs/design/resources.md#resource-specifications
+  // More info: http://kubernetes.io/docs/user-guide/compute-resources/
   map<string, k8s.io.kubernetes.pkg.api.resource.Quantity> requests = 2;
 }
 

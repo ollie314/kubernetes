@@ -51,6 +51,7 @@ import (
 	proberesults "k8s.io/kubernetes/pkg/kubelet/prober/results"
 	"k8s.io/kubernetes/pkg/kubelet/types"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/security/apparmor"
 	kubetypes "k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util/clock"
 	uexec "k8s.io/kubernetes/pkg/util/exec"
@@ -1781,6 +1782,70 @@ func TestSecurityOptsOperator(t *testing.T) {
 	}
 }
 
+func TestGetSecurityOpts(t *testing.T) {
+	const containerName = "bar"
+	makePod := func(annotations map[string]string) *api.Pod {
+		return &api.Pod{
+			ObjectMeta: api.ObjectMeta{
+				UID:         "12345678",
+				Name:        "foo",
+				Namespace:   "new",
+				Annotations: annotations,
+			},
+			Spec: api.PodSpec{
+				Containers: []api.Container{
+					{Name: containerName},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		msg          string
+		pod          *api.Pod
+		expectedOpts []string
+	}{{
+		msg:          "No security annotations",
+		pod:          makePod(nil),
+		expectedOpts: []string{"seccomp=unconfined"},
+	}, {
+		msg: "Seccomp default",
+		pod: makePod(map[string]string{
+			api.SeccompContainerAnnotationKeyPrefix + containerName: "docker/default",
+		}),
+		expectedOpts: nil,
+	}, {
+		msg: "AppArmor runtime/default",
+		pod: makePod(map[string]string{
+			apparmor.ContainerAnnotationKeyPrefix + containerName: apparmor.ProfileRuntimeDefault,
+		}),
+		expectedOpts: []string{"seccomp=unconfined"},
+	}, {
+		msg: "AppArmor local profile",
+		pod: makePod(map[string]string{
+			apparmor.ContainerAnnotationKeyPrefix + containerName: apparmor.ProfileNamePrefix + "foo",
+		}),
+		expectedOpts: []string{"seccomp=unconfined", "apparmor=foo"},
+	}, {
+		msg: "AppArmor and seccomp profile",
+		pod: makePod(map[string]string{
+			api.SeccompContainerAnnotationKeyPrefix + containerName: "docker/default",
+			apparmor.ContainerAnnotationKeyPrefix + containerName:   apparmor.ProfileNamePrefix + "foo",
+		}),
+		expectedOpts: []string{"apparmor=foo"},
+	}}
+
+	dm, _ := newTestDockerManagerWithVersion("1.11.1", "1.23")
+	for i, test := range tests {
+		opts, err := dm.getSecurityOpts(test.pod, containerName)
+		assert.NoError(t, err, "TestCase[%d]: %s", i, test.msg)
+		assert.Len(t, opts, len(test.expectedOpts), "TestCase[%d]: %s", i, test.msg)
+		for _, opt := range test.expectedOpts {
+			assert.Contains(t, opts, opt, "TestCase[%d]: %s", i, test.msg)
+		}
+	}
+}
+
 func TestSeccompIsUnconfinedByDefaultWithDockerV110(t *testing.T) {
 	dm, fakeDocker := newTestDockerManagerWithVersion("1.10.1", "1.22")
 	pod := &api.Pod{
@@ -2248,50 +2313,103 @@ func TestPruneInitContainers(t *testing.T) {
 }
 
 func TestGetPodStatusFromNetworkPlugin(t *testing.T) {
-	const (
-		containerID      = "123"
-		infraContainerID = "9876"
-		fakePodIP        = "10.10.10.10"
-	)
-	dm, fakeDocker := newTestDockerManager()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	fnp := mock_network.NewMockNetworkPlugin(ctrl)
-	dm.networkPlugin = fnp
-
-	pod := &api.Pod{
-		ObjectMeta: api.ObjectMeta{
-			UID:       "12345678",
-			Name:      "foo",
-			Namespace: "new",
+	cases := []struct {
+		pod                *api.Pod
+		fakePodIP          string
+		containerID        string
+		infraContainerID   string
+		networkStatusError error
+		expectRunning      bool
+		expectUnknown      bool
+	}{
+		{
+			pod: &api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					UID:       "12345678",
+					Name:      "foo",
+					Namespace: "new",
+				},
+				Spec: api.PodSpec{
+					Containers: []api.Container{{Name: "container"}},
+				},
+			},
+			fakePodIP:          "10.10.10.10",
+			containerID:        "123",
+			infraContainerID:   "9876",
+			networkStatusError: nil,
+			expectRunning:      true,
+			expectUnknown:      false,
 		},
-		Spec: api.PodSpec{
-			Containers: []api.Container{{Name: "container"}},
+		{
+			pod: &api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					UID:       "12345678",
+					Name:      "foo",
+					Namespace: "new",
+				},
+				Spec: api.PodSpec{
+					Containers: []api.Container{{Name: "container"}},
+				},
+			},
+			fakePodIP:          "",
+			containerID:        "123",
+			infraContainerID:   "9876",
+			networkStatusError: fmt.Errorf("CNI plugin error"),
+			expectRunning:      false,
+			expectUnknown:      true,
 		},
 	}
+	for _, test := range cases {
+		dm, fakeDocker := newTestDockerManager()
+		ctrl := gomock.NewController(t)
+		fnp := mock_network.NewMockNetworkPlugin(ctrl)
+		dm.networkPlugin = fnp
 
-	fakeDocker.SetFakeRunningContainers([]*FakeContainer{
-		{
-			ID:      containerID,
-			Name:    "/k8s_container_foo_new_12345678_42",
-			Running: true,
-		},
-		{
-			ID:      infraContainerID,
-			Name:    "/k8s_POD." + strconv.FormatUint(generatePodInfraContainerHash(pod), 16) + "_foo_new_12345678_42",
-			Running: true,
-		},
-	})
+		fakeDocker.SetFakeRunningContainers([]*FakeContainer{
+			{
+				ID:      test.containerID,
+				Name:    fmt.Sprintf("/k8s_container_%s_%s_%s_42", test.pod.Name, test.pod.Namespace, test.pod.UID),
+				Running: true,
+			},
+			{
+				ID:      test.infraContainerID,
+				Name:    fmt.Sprintf("/k8s_POD.%s_%s_%s_%s_42", strconv.FormatUint(generatePodInfraContainerHash(test.pod), 16), test.pod.Name, test.pod.Namespace, test.pod.UID),
+				Running: true,
+			},
+		})
 
-	fnp.EXPECT().Name().Return("someNetworkPlugin")
-	fnp.EXPECT().GetPodNetworkStatus("new", "foo", kubecontainer.DockerID(infraContainerID).ContainerID()).Return(&network.PodNetworkStatus{IP: net.ParseIP(fakePodIP)}, nil)
+		fnp.EXPECT().Name().Return("someNetworkPlugin").AnyTimes()
+		var podNetworkStatus *network.PodNetworkStatus
+		if test.fakePodIP != "" {
+			podNetworkStatus = &network.PodNetworkStatus{IP: net.ParseIP(test.fakePodIP)}
+		}
+		fnp.EXPECT().GetPodNetworkStatus(test.pod.Namespace, test.pod.Name, kubecontainer.DockerID(test.infraContainerID).ContainerID()).Return(podNetworkStatus, test.networkStatusError)
 
-	podStatus, err := dm.GetPodStatus(pod.UID, pod.Name, pod.Namespace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if podStatus.IP != fakePodIP {
-		t.Errorf("Got wrong ip, expected %v, got %v", fakePodIP, podStatus.IP)
+		podStatus, err := dm.GetPodStatus(test.pod.UID, test.pod.Name, test.pod.Namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if podStatus.IP != test.fakePodIP {
+			t.Errorf("Got wrong ip, expected %v, got %v", test.fakePodIP, podStatus.IP)
+		}
+
+		expectedStatesCount := 0
+		var expectedState kubecontainer.ContainerState
+		if test.expectRunning {
+			expectedState = kubecontainer.ContainerStateRunning
+		} else if test.expectUnknown {
+			expectedState = kubecontainer.ContainerStateUnknown
+		} else {
+			t.Errorf("Some state has to be expected")
+		}
+		for _, containerStatus := range podStatus.ContainerStatuses {
+			if containerStatus.State == expectedState {
+				expectedStatesCount++
+			}
+		}
+		if expectedStatesCount < 1 {
+			t.Errorf("Invalid count of containers with expected state")
+		}
 	}
 }
 

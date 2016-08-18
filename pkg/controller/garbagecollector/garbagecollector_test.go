@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	_ "k8s.io/kubernetes/pkg/api/install"
+	"k8s.io/kubernetes/pkg/controller/garbagecollector/metaonly"
+	"k8s.io/kubernetes/pkg/runtime/serializer"
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/kubernetes/pkg/api"
@@ -33,15 +35,20 @@ import (
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/dynamic"
 	"k8s.io/kubernetes/pkg/types"
+	"k8s.io/kubernetes/pkg/util/clock"
 	"k8s.io/kubernetes/pkg/util/json"
 	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/util/workqueue"
 )
 
 func TestNewGarbageCollector(t *testing.T) {
-	clientPool := dynamic.NewClientPool(&restclient.Config{}, dynamic.LegacyAPIPathResolverFunc)
+	config := &restclient.Config{}
+	config.ContentConfig.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: metaonly.NewMetadataCodecFactory()}
+	metaOnlyClientPool := dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
+	config.ContentConfig.NegotiatedSerializer = nil
+	clientPool := dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
 	podResource := []unversioned.GroupVersionResource{{Version: "v1", Resource: "pods"}}
-	gc, err := NewGarbageCollector(clientPool, podResource)
+	gc, err := NewGarbageCollector(metaOnlyClientPool, clientPool, podResource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,8 +148,11 @@ func TestProcessItem(t *testing.T) {
 	podResource := []unversioned.GroupVersionResource{{Version: "v1", Resource: "pods"}}
 	srv, clientConfig := testServerAndClientConfig(testHandler.ServeHTTP)
 	defer srv.Close()
+	clientConfig.ContentConfig.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: metaonly.NewMetadataCodecFactory()}
+	metaOnlyClientPool := dynamic.NewClientPool(clientConfig, dynamic.LegacyAPIPathResolverFunc)
+	clientConfig.ContentConfig.NegotiatedSerializer = nil
 	clientPool := dynamic.NewClientPool(clientConfig, dynamic.LegacyAPIPathResolverFunc)
-	gc, err := NewGarbageCollector(clientPool, podResource)
+	gc, err := NewGarbageCollector(metaOnlyClientPool, clientPool, podResource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,13 +283,14 @@ func TestProcessEvent(t *testing.T) {
 
 	for _, scenario := range testScenarios {
 		propagator := &Propagator{
-			eventQueue: workqueue.New(),
+			eventQueue: workqueue.NewTimedWorkQueue(clock.RealClock{}),
 			uidToNode: &concurrentUIDToNode{
 				RWMutex:   &sync.RWMutex{},
 				uidToNode: make(map[types.UID]*node),
 			},
 			gc: &GarbageCollector{
-				dirtyQueue: workqueue.New(),
+				dirtyQueue: workqueue.NewTimedWorkQueue(clock.RealClock{}),
+				clock:      clock.RealClock{},
 			},
 		}
 		for i := 0; i < len(scenario.events); i++ {
@@ -293,15 +304,19 @@ func TestProcessEvent(t *testing.T) {
 // TestDependentsRace relies on golang's data race detector to check if there is
 // data race among in the dependents field.
 func TestDependentsRace(t *testing.T) {
-	clientPool := dynamic.NewClientPool(&restclient.Config{}, dynamic.LegacyAPIPathResolverFunc)
+	config := &restclient.Config{}
+	config.ContentConfig.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: metaonly.NewMetadataCodecFactory()}
+	metaOnlyClientPool := dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
+	config.ContentConfig.NegotiatedSerializer = nil
+	clientPool := dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
 	podResource := []unversioned.GroupVersionResource{{Version: "v1", Resource: "pods"}}
-	gc, err := NewGarbageCollector(clientPool, podResource)
+	gc, err := NewGarbageCollector(metaOnlyClientPool, clientPool, podResource)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	const updates = 100
-	owner := &node{dependentsLock: &sync.RWMutex{}, dependents: make(map[*node]struct{})}
+	owner := &node{dependents: make(map[*node]struct{})}
 	ownerUID := types.UID("owner")
 	gc.propagator.uidToNode.Write(owner)
 	go func() {

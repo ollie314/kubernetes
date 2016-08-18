@@ -57,6 +57,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/util/cache"
 	"k8s.io/kubernetes/pkg/kubelet/util/format"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/security/apparmor"
 	"k8s.io/kubernetes/pkg/securitycontext"
 	kubetypes "k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util/flowcontrol"
@@ -108,8 +109,8 @@ var (
 	// TODO: make this a TTL based pull (if image older than X policy, pull)
 	podInfraContainerImagePullPolicy = api.PullIfNotPresent
 
-	// Default security option, only seccomp for now
-	defaultSeccompProfile = "unconfined"
+	// Default set of seccomp security options.
+	defaultSeccompOpt = []dockerOpt{{"seccomp", "unconfined"}}
 )
 
 type DockerManager struct {
@@ -332,7 +333,7 @@ var (
 // determineContainerIP determines the IP address of the given container.  It is expected
 // that the container passed is the infrastructure container of a pod and the responsibility
 // of the caller to ensure that the correct container is passed.
-func (dm *DockerManager) determineContainerIP(podNamespace, podName string, container *dockertypes.ContainerJSON) string {
+func (dm *DockerManager) determineContainerIP(podNamespace, podName string, container *dockertypes.ContainerJSON) (string, error) {
 	result := ""
 
 	if container.NetworkSettings != nil {
@@ -348,12 +349,13 @@ func (dm *DockerManager) determineContainerIP(podNamespace, podName string, cont
 		netStatus, err := dm.networkPlugin.GetPodNetworkStatus(podNamespace, podName, kubecontainer.DockerID(container.ID).ContainerID())
 		if err != nil {
 			glog.Errorf("NetworkPlugin %s failed on the status hook for pod '%s' - %v", dm.networkPlugin.Name(), podName, err)
+			return result, err
 		} else if netStatus != nil {
 			result = netStatus.IP.String()
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 func (dm *DockerManager) inspectContainer(id string, podName, podNamespace string) (*kubecontainer.ContainerStatus, string, error) {
@@ -404,7 +406,12 @@ func (dm *DockerManager) inspectContainer(id string, podName, podNamespace strin
 		status.State = kubecontainer.ContainerStateRunning
 		status.StartedAt = startedAt
 		if containerName == PodInfraContainerName {
-			ip = dm.determineContainerIP(podNamespace, podName, iResult)
+			ip, err = dm.determineContainerIP(podNamespace, podName, iResult)
+			// Kubelet doesn't handle the network error scenario
+			if err != nil {
+				status.State = kubecontainer.ContainerStateUnknown
+				status.Message = fmt.Sprintf("Network error: %#v", err)
+			}
 		}
 		return &status, ip, nil
 	}
@@ -604,9 +611,9 @@ func (dm *DockerManager) runContainer(
 		// Experimental. For now, we hardcode /dev/nvidia0 no matter what the user asks for
 		// (we only support one device per node).
 		devices = []dockercontainer.DeviceMapping{
-			{"/dev/nvidia0", "/dev/nvidia0", "mrw"},
-			{"/dev/nvidiactl", "/dev/nvidiactl", "mrw"},
-			{"/dev/nvidia-uvm", "/dev/nvidia-uvm", "mrw"},
+			{PathOnHost: "/dev/nvidia0", PathInContainer: "/dev/nvidia0", CgroupPermissions: "mrw"},
+			{PathOnHost: "/dev/nvidiactl", PathInContainer: "/dev/nvidiactl", CgroupPermissions: "mrw"},
+			{PathOnHost: "/dev/nvidia-uvm", PathInContainer: "/dev/nvidia-uvm", CgroupPermissions: "mrw"},
 		}
 	}
 	podHasSELinuxLabel := pod.Spec.SecurityContext != nil && pod.Spec.SecurityContext.SELinuxOptions != nil
@@ -699,7 +706,7 @@ func (dm *DockerManager) runContainer(
 	securityContextProvider.ModifyHostConfig(pod, container, dockerOpts.HostConfig, supplementalGids)
 	createResp, err := dm.client.CreateContainer(dockerOpts)
 	if err != nil {
-		dm.recorder.Eventf(ref, api.EventTypeWarning, events.FailedToCreateContainer, "Failed to create docker container with error: %v", err)
+		dm.recorder.Eventf(ref, api.EventTypeWarning, events.FailedToCreateContainer, "Failed to create docker container %q of pod %q with error: %v", container.Name, format.Pod(pod), err)
 		return kubecontainer.ContainerID{}, err
 	}
 	if len(createResp.Warnings) != 0 {
@@ -780,7 +787,7 @@ func (dm *DockerManager) GetContainers(all bool) ([]*kubecontainer.Container, er
 	for _, c := range containers {
 		converted, err := toRuntimeContainer(c)
 		if err != nil {
-			glog.Errorf("Error examining the container: %v", err)
+			glog.Errorf("Error examining the container %v: %v", c.ID, err)
 			continue
 		}
 		result = append(result, converted)
@@ -805,13 +812,13 @@ func (dm *DockerManager) GetPods(all bool) ([]*kubecontainer.Pod, error) {
 	for _, c := range containers {
 		converted, err := toRuntimeContainer(c)
 		if err != nil {
-			glog.Errorf("Error examining the container: %v", err)
+			glog.Errorf("Error examining the container %v: %v", c.ID, err)
 			continue
 		}
 
 		podUID, podName, podNamespace, err := getPodInfoFromContainer(c)
 		if err != nil {
-			glog.Errorf("Error examining the container: %v", err)
+			glog.Errorf("Error examining the container %v: %v", c.ID, err)
 			continue
 		}
 
@@ -1034,22 +1041,52 @@ func (dm *DockerManager) getSecurityOpts(pod *api.Pod, ctrName string) ([]string
 		return nil, err
 	}
 
-	// seccomp is only on docker versions >= v1.10
-	result, err := version.Compare(dockerV110APIVersion)
-	if err != nil {
+	var securityOpts []dockerOpt
+	if seccompOpts, err := dm.getSeccompOpts(pod, ctrName, version); err != nil {
 		return nil, err
-	}
-	var optFmt string
-	switch {
-	case result < 0:
-		return nil, nil // return early for Docker < 1.10
-	case result == 0:
-		optFmt = "%s:%s" // use colon notation for Docker 1.10
-	case result > 0:
-		optFmt = "%s=%s" // use = notation for Docker >= 1.11
+	} else {
+		securityOpts = append(securityOpts, seccompOpts...)
 	}
 
-	defaultSecurityOpts := []string{fmt.Sprintf(optFmt, "seccomp", defaultSeccompProfile)}
+	if appArmorOpts, err := dm.getAppArmorOpts(pod, ctrName); err != nil {
+		return nil, err
+	} else {
+		securityOpts = append(securityOpts, appArmorOpts...)
+	}
+
+	const (
+		// Docker changed the API for specifying options in v1.11
+		optSeparatorChangeVersion = "1.23" // Corresponds to docker 1.11.x
+		optSeparatorOld           = ':'
+		optSeparatorNew           = '='
+	)
+
+	sep := optSeparatorNew
+	if result, err := version.Compare(optSeparatorChangeVersion); err != nil {
+		return nil, fmt.Errorf("error parsing docker API version: %v", err)
+	} else if result < 0 {
+		sep = optSeparatorOld
+	}
+
+	opts := make([]string, len(securityOpts))
+	for i, opt := range securityOpts {
+		opts[i] = fmt.Sprintf("%s%c%s", opt.key, sep, opt.value)
+	}
+	return opts, nil
+}
+
+type dockerOpt struct {
+	key, value string
+}
+
+// Get the docker security options for seccomp.
+func (dm *DockerManager) getSeccompOpts(pod *api.Pod, ctrName string, version kubecontainer.Version) ([]dockerOpt, error) {
+	// seccomp is only on docker versions >= v1.10
+	if result, err := version.Compare(dockerV110APIVersion); err != nil {
+		return nil, err
+	} else if result < 0 {
+		return nil, nil // return early for Docker < 1.10
+	}
 
 	profile, profileOK := pod.ObjectMeta.Annotations[api.SeccompContainerAnnotationKeyPrefix+ctrName]
 	if !profileOK {
@@ -1057,13 +1094,13 @@ func (dm *DockerManager) getSecurityOpts(pod *api.Pod, ctrName string) ([]string
 		profile, profileOK = pod.ObjectMeta.Annotations[api.SeccompPodAnnotationKey]
 		if !profileOK {
 			// return early the default
-			return defaultSecurityOpts, nil
+			return defaultSeccompOpt, nil
 		}
 	}
 
 	if profile == "unconfined" {
 		// return early the default
-		return defaultSecurityOpts, nil
+		return defaultSeccompOpt, nil
 	}
 
 	if profile == "docker/default" {
@@ -1087,7 +1124,20 @@ func (dm *DockerManager) getSecurityOpts(pod *api.Pod, ctrName string) ([]string
 		return nil, err
 	}
 
-	return []string{fmt.Sprintf(optFmt, "seccomp", b.Bytes())}, nil
+	return []dockerOpt{{"seccomp", b.String()}}, nil
+}
+
+// Get the docker security options for AppArmor.
+func (dm *DockerManager) getAppArmorOpts(pod *api.Pod, ctrName string) ([]dockerOpt, error) {
+	profile := apparmor.GetProfileName(pod, ctrName)
+	if profile == "" || profile == apparmor.ProfileRuntimeDefault {
+		// The docker applies the default profile by default.
+		return nil, nil
+	}
+
+	// Assume validation has already happened.
+	profileName := strings.TrimPrefix(profile, apparmor.ProfileNamePrefix)
+	return []dockerOpt{{"apparmor", profileName}}, nil
 }
 
 type dockerExitError struct {
@@ -1287,7 +1337,7 @@ func (dm *DockerManager) killPodWithSyncResult(pod *api.Pod, runningPod kubecont
 			err := dm.KillContainerInPod(container.ID, containerSpec, pod, "Need to kill pod.", gracePeriodOverride)
 			if err != nil {
 				killContainerResult.Fail(kubecontainer.ErrKillContainer, err.Error())
-				glog.Errorf("Failed to delete container: %v; Skipping pod %q", err, runningPod.ID)
+				glog.Errorf("Failed to delete container %v: %v; Skipping pod %q", container.ID.ID, err, runningPod.ID)
 			}
 			containerResults <- killContainerResult
 		}(container)
@@ -1319,7 +1369,7 @@ func (dm *DockerManager) killPodWithSyncResult(pod *api.Pod, runningPod kubecont
 		result.AddSyncResult(killContainerResult)
 		if err := dm.KillContainerInPod(networkContainer.ID, networkSpec, pod, "Need to kill pod.", gracePeriodOverride); err != nil {
 			killContainerResult.Fail(kubecontainer.ErrKillContainer, err.Error())
-			glog.Errorf("Failed to delete container: %v; Skipping pod %q", err, runningPod.ID)
+			glog.Errorf("Failed to delete container %v: %v; Skipping pod %q", networkContainer.ID.ID, err, runningPod.ID)
 		}
 	}
 	return
@@ -2049,7 +2099,12 @@ func (dm *DockerManager) SyncPod(pod *api.Pod, _ api.PodStatus, podStatus *kubec
 			}
 
 			// Overwrite the podIP passed in the pod status, since we just started the infra container.
-			podIP = dm.determineContainerIP(pod.Namespace, pod.Name, podInfraContainer)
+			podIP, err = dm.determineContainerIP(pod.Namespace, pod.Name, podInfraContainer)
+			if err != nil {
+				glog.Errorf("Network error: %v; Skipping pod %q", err, format.Pod(pod))
+				result.Fail(err)
+				return
+			}
 			glog.V(4).Infof("Determined pod ip after infra change: %q: %q", format.Pod(pod), podIP)
 		}
 	}

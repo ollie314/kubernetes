@@ -71,6 +71,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/util/queue"
 	"k8s.io/kubernetes/pkg/kubelet/volumemanager"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/security/apparmor"
 	"k8s.io/kubernetes/pkg/securitycontext"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util/bandwidth"
@@ -514,6 +515,7 @@ func NewMainKubelet(
 		return nil, err
 	}
 
+	// setup volumeManager
 	klet.volumeManager, err = volumemanager.NewVolumeManager(
 		enableControllerAttachDetach,
 		nodeName,
@@ -521,7 +523,8 @@ func NewMainKubelet(
 		klet.kubeClient,
 		klet.volumePluginMgr,
 		klet.containerRuntime,
-		mounter)
+		mounter,
+		klet.getPodsDir())
 
 	runtimeCache, err := kubecontainer.NewRuntimeCache(klet.containerRuntime)
 	if err != nil {
@@ -551,6 +554,8 @@ func NewMainKubelet(
 	}
 	klet.AddPodSyncLoopHandler(activeDeadlineHandler)
 	klet.AddPodSyncHandler(activeDeadlineHandler)
+
+	klet.AddPodAdmitHandler(apparmor.NewValidator(containerRuntime))
 
 	// apply functional Option's
 	for _, opt := range kubeOptions {
@@ -957,7 +962,7 @@ func (kl *Kubelet) Run(updates <-chan kubetypes.PodUpdate) {
 	}
 
 	// Start volume manager
-	go kl.volumeManager.Run(wait.NeverStop)
+	go kl.volumeManager.Run(kl.sourcesReady, wait.NeverStop)
 
 	if kl.kubeClient != nil {
 		// Start syncing node status immediately, this may set up things the runtime needs to run.
@@ -1012,7 +1017,11 @@ func (kl *Kubelet) relabelVolumes(pod *api.Pod, volumes kubecontainer.VolumeMap)
 	for _, vol := range volumes {
 		if vol.Mounter.GetAttributes().Managed && vol.Mounter.GetAttributes().SupportsSELinux {
 			// Relabel the volume and its content to match the 'Level' of the pod
-			err := filepath.Walk(vol.Mounter.GetPath(), func(path string, info os.FileInfo, err error) error {
+			path, err := volume.GetPath(vol.Mounter)
+			if err != nil {
+				return err
+			}
+			err = filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return err
 				}
@@ -1053,7 +1062,10 @@ func makeMounts(pod *api.Pod, podDir string, container *api.Container, hostName,
 			vol.SELinuxLabeled = true
 			relabelVolume = true
 		}
-		hostPath := vol.Mounter.GetPath()
+		hostPath, err := volume.GetPath(vol.Mounter)
+		if err != nil {
+			return nil, err
+		}
 		if mount.SubPath != "" {
 			hostPath = filepath.Join(hostPath, mount.SubPath)
 		}
@@ -1628,11 +1640,7 @@ func (kl *Kubelet) syncPod(o syncPodOptions) error {
 	}
 
 	// Wait for volumes to attach/mount
-	defaultedPod, _, err := kl.defaultPodLimitsForDownwardApi(pod, nil)
-	if err != nil {
-		return err
-	}
-	if err := kl.volumeManager.WaitForAttachAndMount(defaultedPod); err != nil {
+	if err := kl.volumeManager.WaitForAttachAndMount(pod); err != nil {
 		kl.recorder.Eventf(pod, api.EventTypeWarning, events.FailedMountVolume, "Unable to mount volumes for pod %q: %v", format.Pod(pod), err)
 		glog.Errorf("Unable to mount volumes for pod %q: %v; skipping pod", format.Pod(pod), err)
 		return err
@@ -1724,16 +1732,21 @@ func (kl *Kubelet) cleanupOrphanedPodDirs(
 		if allPods.Has(string(uid)) {
 			continue
 		}
+		// If volumes have not been unmounted/detached, do not delete directory.
+		// Doing so may result in corruption of data.
 		if podVolumesExist := kl.podVolumesExist(uid); podVolumesExist {
-			// If volumes have not been unmounted/detached, do not delete directory.
-			// Doing so may result in corruption of data.
 			glog.V(3).Infof("Orphaned pod %q found, but volumes are not cleaned up; err: %v", uid, err)
+			continue
+		}
+		// Check whether volume is still mounted on disk. If so, do not delete directory
+		if volumeNames, err := kl.getPodVolumeNameListFromDisk(uid); err != nil || len(volumeNames) != 0 {
+			glog.V(3).Infof("Orphaned pod %q found, but volumes are still mounted; err: %v, volumes: %v ", uid, err, volumeNames)
 			continue
 		}
 
 		glog.V(3).Infof("Orphaned pod %q found, removing", uid)
 		if err := os.RemoveAll(kl.getPodDir(uid)); err != nil {
-			glog.Infof("Failed to remove orphaned pod %q dir; err: %v", uid, err)
+			glog.Errorf("Failed to remove orphaned pod %q dir; err: %v", uid, err)
 			errlist = append(errlist, err)
 		}
 	}
@@ -2052,23 +2065,40 @@ func (kl *Kubelet) canAdmitPod(pods []*api.Pod, pod *api.Pod) (bool, string, str
 	}
 	nodeInfo := schedulercache.NewNodeInfo(pods...)
 	nodeInfo.SetNode(node)
-	fit, err := predicates.GeneralPredicates(pod, nil, nodeInfo)
-	if !fit {
-		if re, ok := err.(*predicates.PredicateFailureError); ok {
-			reason := re.PredicateName
-			message := re.Error()
-			glog.V(2).Infof("Predicate failed on Pod: %v, for reason: %v", format.Pod(pod), message)
-			return fit, reason, message
-		}
-		if re, ok := err.(*predicates.InsufficientResourceError); ok {
-			reason := fmt.Sprintf("OutOf%s", re.ResourceName)
-			message := re.Error()
-			glog.V(2).Infof("Predicate failed on Pod: %v, for reason: %v", format.Pod(pod), message)
-			return fit, reason, message
-		}
-		reason := "UnexpectedPredicateFailureType"
+	fit, reasons, err := predicates.GeneralPredicates(pod, nil, nodeInfo)
+	if err != nil {
 		message := fmt.Sprintf("GeneralPredicates failed due to %v, which is unexpected.", err)
 		glog.Warningf("Failed to admit pod %v - %s", format.Pod(pod), message)
+		return fit, "UnexpectedError", message
+	}
+	if !fit {
+		var reason string
+		var message string
+		if len(reasons) == 0 {
+			message = fmt.Sprint("GeneralPredicates failed due to unknown reason, which is unexpected.")
+			glog.Warningf("Failed to admit pod %v - %s", format.Pod(pod), message)
+			return fit, "UnknownReason", message
+		}
+		// If there are failed predicates, we only return the first one as a reason.
+		r := reasons[0]
+		switch re := r.(type) {
+		case *predicates.PredicateFailureError:
+			reason = re.PredicateName
+			message = re.Error()
+			glog.V(2).Infof("Predicate failed on Pod: %v, for reason: %v", format.Pod(pod), message)
+		case *predicates.InsufficientResourceError:
+			reason = fmt.Sprintf("OutOf%s", re.ResourceName)
+			message := re.Error()
+			glog.V(2).Infof("Predicate failed on Pod: %v, for reason: %v", format.Pod(pod), message)
+		case *predicates.FailureReason:
+			reason = re.GetReason()
+			message = fmt.Sprintf("Failure: %s", re.GetReason())
+			glog.V(2).Infof("Predicate failed on Pod: %v, for reason: %v", format.Pod(pod), message)
+		default:
+			reason = "UnexpectedPredicateFailureType"
+			message := fmt.Sprintf("GeneralPredicates failed due to %v, which is unexpected.", r)
+			glog.Warningf("Failed to admit pod %v - %s", format.Pod(pod), message)
+		}
 		return fit, reason, message
 	}
 	// TODO: When disk space scheduling is implemented (#11976), remove the out-of-disk check here and
@@ -2151,7 +2181,6 @@ func (kl *Kubelet) syncLoopIteration(configCh <-chan kubetypes.PodUpdate, handle
 			glog.Errorf("Update channel is closed. Exiting the sync loop.")
 			return false
 		}
-		kl.sourcesReady.AddSource(u.Source)
 
 		switch u.Op {
 		case kubetypes.ADD:
@@ -2178,17 +2207,24 @@ func (kl *Kubelet) syncLoopIteration(configCh <-chan kubetypes.PodUpdate, handle
 			// TODO: Do we want to support this?
 			glog.Errorf("Kubelet does not support snapshot update")
 		}
+
+		// Mark the source ready after receiving at least one update from the
+		// source. Once all the sources are marked ready, various cleanup
+		// routines will start reclaiming resources. It is important that this
+		// takes place only after kubelet calls the update handler to process
+		// the update to ensure the internal pod cache is up-to-date.
+		kl.sourcesReady.AddSource(u.Source)
+
 	case e := <-plegCh:
 		if isSyncPodWorthy(e) {
 			// PLEG event for a pod; sync it.
-			pod, ok := kl.podManager.GetPodByUID(e.ID)
-			if !ok {
+			if pod, ok := kl.podManager.GetPodByUID(e.ID); ok {
+				glog.V(2).Infof("SyncLoop (PLEG): %q, event: %#v", format.Pod(pod), e)
+				handler.HandlePodSyncs([]*api.Pod{pod})
+			} else {
 				// If the pod no longer exists, ignore the event.
 				glog.V(4).Infof("SyncLoop (PLEG): ignore irrelevant event: %#v", e)
-				break
 			}
-			glog.V(2).Infof("SyncLoop (PLEG): %q, event: %#v", format.Pod(pod), e)
-			handler.HandlePodSyncs([]*api.Pod{pod})
 		}
 
 		if e.Type == pleg.ContainerDied {

@@ -18,6 +18,7 @@ package framework
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"reflect"
@@ -25,14 +26,15 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/kubernetes/federation/client/clientset_generated/federation_internalclientset"
-	unversionedfederation "k8s.io/kubernetes/federation/client/clientset_generated/federation_internalclientset/typed/federation/unversioned"
-	"k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_3"
+	release_1_4 "k8s.io/client-go/1.4/kubernetes"
+	"k8s.io/client-go/1.4/pkg/util/sets"
+	clientreporestclient "k8s.io/client-go/1.4/rest"
 	"k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_4"
 	"k8s.io/kubernetes/pkg/api"
 	apierrs "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/release_1_2"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/release_1_3"
+	"k8s.io/kubernetes/pkg/client/restclient"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
@@ -57,13 +59,9 @@ type Framework struct {
 	Client        *client.Client
 	Clientset_1_2 *release_1_2.Clientset
 	Clientset_1_3 *release_1_3.Clientset
+	StagingClient *release_1_4.Clientset
 
-	// TODO(mml): Remove this.  We should generally use the versioned clientset.
-	FederationClientset     *federation_internalclientset.Clientset
-	FederationClientset_1_3 *federation_release_1_3.Clientset
 	FederationClientset_1_4 *federation_release_1_4.Clientset
-	// TODO: remove FederationClient, all the client access must be through FederationClientset
-	FederationClient *unversionedfederation.FederationClient
 
 	Namespace                *api.Namespace   // Every test has at least one namespace
 	namespacesToDelete       []*api.Namespace // Some tests have more than one.
@@ -131,6 +129,38 @@ func NewFramework(baseName string, options FrameworkOptions, client *client.Clie
 	return f
 }
 
+// getClientRepoConfig copies k8s.io/kubernetes/pkg/client/restclient.Config to
+// a k8s.io/client-go/pkg/client/restclient.Config. It's not a deep copy. Two
+// configs may share some common struct.
+func getClientRepoConfig(src *restclient.Config) (dst *clientreporestclient.Config) {
+	skippedFields := sets.NewString("Transport", "WrapTransport", "RateLimiter", "AuthConfigPersister")
+	dst = &clientreporestclient.Config{}
+	dst.Transport = src.Transport
+	dst.WrapTransport = src.WrapTransport
+	dst.RateLimiter = src.RateLimiter
+	dst.AuthConfigPersister = src.AuthConfigPersister
+	sv := reflect.ValueOf(src).Elem()
+	dv := reflect.ValueOf(dst).Elem()
+	for i := 0; i < sv.NumField(); i++ {
+		if skippedFields.Has(sv.Type().Field(i).Name) {
+			continue
+		}
+		sf := sv.Field(i).Interface()
+		data, err := json.Marshal(sf)
+		if err != nil {
+			Expect(err).NotTo(HaveOccurred())
+		}
+		if !dv.Field(i).CanAddr() {
+			Failf("unaddressable field: %v", dv.Type().Field(i).Name)
+		} else {
+			if err := json.Unmarshal(data, dv.Field(i).Addr().Interface()); err != nil {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		}
+	}
+	return dst
+}
+
 // BeforeEach gets a client and makes a namespace.
 func (f *Framework) BeforeEach() {
 	// The fact that we need this feels like a bug in ginkgo.
@@ -149,28 +179,18 @@ func (f *Framework) BeforeEach() {
 		Expect(err).NotTo(HaveOccurred())
 		f.Client = c
 		f.Clientset_1_2, err = release_1_2.NewForConfig(config)
-		Expect(err).NotTo(HaveOccurred())
 		f.Clientset_1_3, err = release_1_3.NewForConfig(config)
+		Expect(err).NotTo(HaveOccurred())
+		clientRepoConfig := getClientRepoConfig(config)
+		f.StagingClient, err = release_1_4.NewForConfig(clientRepoConfig)
 		Expect(err).NotTo(HaveOccurred())
 	}
 
 	if f.federated {
-		if f.FederationClient == nil {
-			By("Creating a federated kubernetes client")
+		if f.FederationClientset_1_4 == nil {
+			By("Creating a release 1.4 federation Clientset")
 			var err error
-			f.FederationClient, err = LoadFederationClient()
-			Expect(err).NotTo(HaveOccurred())
-		}
-		if f.FederationClientset == nil {
-			By("Creating an unversioned federation Clientset")
-			var err error
-			f.FederationClientset, err = LoadFederationClientset()
-			Expect(err).NotTo(HaveOccurred())
-		}
-		if f.FederationClientset_1_3 == nil {
-			By("Creating a release 1.3 federation Clientset")
-			var err error
-			f.FederationClientset_1_3, err = LoadFederationClientset_1_3()
+			f.FederationClientset_1_4, err = LoadFederationClientset_1_4()
 			Expect(err).NotTo(HaveOccurred())
 		}
 		if f.FederationClientset_1_4 == nil {
@@ -180,7 +200,7 @@ func (f *Framework) BeforeEach() {
 			Expect(err).NotTo(HaveOccurred())
 		}
 		By("Waiting for federation-apiserver to be ready")
-		err := WaitForFederationApiserverReady(f.FederationClientset)
+		err := WaitForFederationApiserverReady(f.FederationClientset_1_4)
 		Expect(err).NotTo(HaveOccurred())
 		By("federation-apiserver is ready")
 	}
@@ -260,15 +280,11 @@ func (f *Framework) AfterEach() {
 
 	if f.federated {
 		defer func() {
-			if f.FederationClient == nil {
-				Logf("Warning: framework is marked federated, but has no federation client")
+			if f.FederationClientset_1_4 == nil {
+				Logf("Warning: framework is marked federated, but has no federation 1.4 clientset")
 				return
 			}
-			if f.FederationClientset == nil {
-				Logf("Warning: framework is marked federated, but has no federation clientset")
-				return
-			}
-			if err := f.FederationClient.Clusters().DeleteCollection(nil, api.ListOptions{}); err != nil {
+			if err := f.FederationClientset_1_4.Federation().Clusters().DeleteCollection(nil, api.ListOptions{}); err != nil {
 				Logf("Error: failed to delete Clusters: %+v", err)
 			}
 		}()

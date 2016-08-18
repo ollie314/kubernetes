@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
@@ -35,7 +36,9 @@ import (
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/dynamic"
 	"k8s.io/kubernetes/pkg/controller/garbagecollector"
+	"k8s.io/kubernetes/pkg/controller/garbagecollector/metaonly"
 	"k8s.io/kubernetes/pkg/registry/generic/registry"
+	"k8s.io/kubernetes/pkg/runtime/serializer"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/test/integration/framework"
@@ -127,8 +130,12 @@ func setup(t *testing.T) (*httptest.Server, *garbagecollector.GarbageCollector, 
 	if err != nil {
 		t.Fatalf("Failed to get supported resources from server: %v", err)
 	}
-	clientPool := dynamic.NewClientPool(&restclient.Config{Host: s.URL}, dynamic.LegacyAPIPathResolverFunc)
-	gc, err := garbagecollector.NewGarbageCollector(clientPool, groupVersionResources)
+	config := &restclient.Config{Host: s.URL}
+	config.ContentConfig.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: metaonly.NewMetadataCodecFactory()}
+	metaOnlyClientPool := dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
+	config.ContentConfig.NegotiatedSerializer = nil
+	clientPool := dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
+	gc, err := garbagecollector.NewGarbageCollector(metaOnlyClientPool, clientPool, groupVersionResources)
 	if err != nil {
 		t.Fatalf("Failed to create garbage collector")
 	}
@@ -215,7 +222,7 @@ func TestCascadingDeletion(t *testing.T) {
 	// sometimes the deletion of the RC takes long time to be observed by
 	// the gc, so wait for the garbage collector to observe the deletion of
 	// the toBeDeletedRC
-	if err := wait.Poll(10*time.Second, 120*time.Second, func() (bool, error) {
+	if err := wait.Poll(10*time.Second, 60*time.Second, func() (bool, error) {
 		return !gc.GraphHasUID([]types.UID{toBeDeletedRC.ObjectMeta.UID}), nil
 	}); err != nil {
 		t.Fatal(err)
@@ -418,6 +425,19 @@ func TestStressingCascadingDeletion(t *testing.T) {
 	if gc.GraphHasUID(uids) {
 		t.Errorf("Expect all nodes representing replication controllers are removed from the Propagator's graph")
 	}
+	metric := &dto.Metric{}
+	garbagecollector.EventProcessingLatency.Write(metric)
+	count := float64(metric.Summary.GetSampleCount())
+	sum := metric.Summary.GetSampleSum()
+	t.Logf("Average time spent in GC's eventQueue is %.1f microseconds", sum/count)
+	garbagecollector.DirtyProcessingLatency.Write(metric)
+	count = float64(metric.Summary.GetSampleCount())
+	sum = metric.Summary.GetSampleSum()
+	t.Logf("Average time spent in GC's dirtyQueue is %.1f microseconds", sum/count)
+	garbagecollector.OrphanProcessingLatency.Write(metric)
+	count = float64(metric.Summary.GetSampleCount())
+	sum = metric.Summary.GetSampleSum()
+	t.Logf("Average time spent in GC's orphanQueue is %.1f microseconds", sum/count)
 }
 
 func TestOrphaning(t *testing.T) {

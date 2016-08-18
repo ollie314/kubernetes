@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -101,7 +102,8 @@ func NewKubeletCommand() *cobra.Command {
 node. The kubelet works in terms of a PodSpec. A PodSpec is a YAML or JSON object
 that describes a pod. The kubelet takes a set of PodSpecs that are provided through
 various mechanisms (primarily through the apiserver) and ensures that the containers
-described in those PodSpecs are running and healthy.
+described in those PodSpecs are running and healthy. The kubelet doesn't manage
+containers which were not created by Kubernetes.
 
 Other than from an PodSpec from the apiserver, there are three ways that a container
 manifest can be provided to the Kubelet.
@@ -208,7 +210,7 @@ func UnsecuredKubeletConfig(s *options.KubeletServer) (*KubeletConfig, error) {
 		Cloud:                        nil, // cloud provider might start background processes
 		ClusterDNS:                   net.ParseIP(s.ClusterDNS),
 		ClusterDomain:                s.ClusterDomain,
-		ConfigFile:                   s.Config,
+		ConfigFile:                   s.PodManifestPath,
 		ConfigureCBR0:                s.ConfigureCBR0,
 		ContainerManager:             nil,
 		ContainerRuntime:             s.ContainerRuntime,
@@ -280,9 +282,10 @@ func UnsecuredKubeletConfig(s *options.KubeletServer) (*KubeletConfig, error) {
 		HairpinMode:                    s.HairpinMode,
 		BabysitDaemons:                 s.BabysitDaemons,
 		ExperimentalFlannelOverlay:     s.ExperimentalFlannelOverlay,
-		NodeIP:         net.ParseIP(s.NodeIP),
-		EvictionConfig: evictionConfig,
-		PodsPerCore:    int(s.PodsPerCore),
+		NodeIP:                net.ParseIP(s.NodeIP),
+		EvictionConfig:        evictionConfig,
+		PodsPerCore:           int(s.PodsPerCore),
+		ProtectKernelDefaults: s.ProtectKernelDefaults,
 	}, nil
 }
 
@@ -291,11 +294,19 @@ func UnsecuredKubeletConfig(s *options.KubeletServer) (*KubeletConfig, error) {
 // Otherwise, the caller is assumed to have set up the KubeletConfig object and all defaults
 // will be ignored.
 func Run(s *options.KubeletServer, kcfg *KubeletConfig) error {
-	err := run(s, kcfg)
-	if err != nil {
-		glog.Errorf("Failed running kubelet: %v", err)
+	if err := run(s, kcfg); err != nil {
+		return fmt.Errorf("failed to run Kubelet: %v", err)
 	}
-	return err
+	return nil
+}
+
+func checkPermissions() error {
+	if uid := os.Getuid(); uid != 0 {
+		return fmt.Errorf("Kubelet needs to run as uid `0`. It is being run as %d", uid)
+	}
+	// TODO: Check if kubelet is running in the `initial` user namespace.
+	// http://man7.org/linux/man-pages/man7/user_namespaces.7.html
+	return nil
 }
 
 func run(s *options.KubeletServer, kcfg *KubeletConfig) (err error) {
@@ -321,26 +332,36 @@ func run(s *options.KubeletServer, kcfg *KubeletConfig) (err error) {
 	} else {
 		glog.Errorf("unable to register configz: %s", err)
 	}
-	if kcfg == nil {
-		cfg, err := UnsecuredKubeletConfig(s)
-		if err != nil {
-			return err
-		}
-		kcfg = cfg
 
+	if kcfg == nil {
+		var kubeClient, eventClient *clientset.Clientset
 		clientConfig, err := CreateAPIServerClientConfig(s)
 		if err == nil {
-			kcfg.KubeClient, err = clientset.NewForConfig(clientConfig)
+			kubeClient, err = clientset.NewForConfig(clientConfig)
 
 			// make a separate client for events
 			eventClientConfig := *clientConfig
 			eventClientConfig.QPS = float32(s.EventRecordQPS)
 			eventClientConfig.Burst = int(s.EventBurst)
-			kcfg.EventClient, err = clientset.NewForConfig(&eventClientConfig)
+			eventClient, err = clientset.NewForConfig(&eventClientConfig)
 		}
-		if err != nil && len(s.APIServerList) > 0 {
-			glog.Warningf("No API client: %v", err)
+		if err != nil {
+			if s.RequireKubeConfig {
+				return fmt.Errorf("invalid kubeconfig: %v", err)
+			}
+			// TODO: this should be replaced by a --standalone flag
+			if len(s.APIServerList) > 0 {
+				glog.Warningf("No API client: %v", err)
+			}
 		}
+
+		cfg, err := UnsecuredKubeletConfig(s)
+		if err != nil {
+			return err
+		}
+		kcfg = cfg
+		kcfg.KubeClient = kubeClient
+		kcfg.EventClient = eventClient
 
 		if s.CloudProvider == kubeExternal.AutoDetectCloudProvider {
 			kcfg.AutoDetectCloudProvider = true
@@ -370,16 +391,21 @@ func run(s *options.KubeletServer, kcfg *KubeletConfig) (err error) {
 			return fmt.Errorf("invalid configuration: system container was specified and cgroup root was not specified")
 		}
 		kcfg.ContainerManager, err = cm.NewContainerManager(kcfg.Mounter, kcfg.CAdvisorInterface, cm.NodeConfig{
-			RuntimeCgroupsName: kcfg.RuntimeCgroups,
-			SystemCgroupsName:  kcfg.SystemCgroups,
-			KubeletCgroupsName: kcfg.KubeletCgroups,
-			ContainerRuntime:   kcfg.ContainerRuntime,
-			CgroupsPerQOS:      kcfg.CgroupsPerQOS,
-			CgroupRoot:         kcfg.CgroupRoot,
+			RuntimeCgroupsName:    kcfg.RuntimeCgroups,
+			SystemCgroupsName:     kcfg.SystemCgroups,
+			KubeletCgroupsName:    kcfg.KubeletCgroups,
+			ContainerRuntime:      kcfg.ContainerRuntime,
+			CgroupsPerQOS:         kcfg.CgroupsPerQOS,
+			CgroupRoot:            kcfg.CgroupRoot,
+			ProtectKernelDefaults: kcfg.ProtectKernelDefaults,
 		})
 		if err != nil {
 			return err
 		}
+	}
+
+	if err := checkPermissions(); err != nil {
+		glog.Error(err)
 	}
 
 	runtime.ReallyCrash = s.ReallyCrashForTesting
@@ -464,9 +490,17 @@ func authPathClientConfig(s *options.KubeletServer, useDefaults bool) (*restclie
 }
 
 func kubeconfigClientConfig(s *options.KubeletServer) (*restclient.Config, error) {
+	if s.RequireKubeConfig {
+		// Ignores the values of s.APIServerList
+		return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+			&clientcmd.ClientConfigLoadingRules{ExplicitPath: s.KubeConfig.Value()},
+			&clientcmd.ConfigOverrides{},
+		).ClientConfig()
+	}
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		&clientcmd.ClientConfigLoadingRules{ExplicitPath: s.KubeConfig.Value()},
-		&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: s.APIServerList[0]}}).ClientConfig()
+		&clientcmd.ConfigOverrides{ClusterInfo: clientcmdapi.Cluster{Server: s.APIServerList[0]}},
+	).ClientConfig()
 }
 
 // createClientConfig creates a client configuration from the command line
@@ -476,6 +510,20 @@ func kubeconfigClientConfig(s *options.KubeletServer) (*restclient.Config, error
 // fall back to the default auth (none) without an error.
 // TODO(roberthbailey): Remove support for --auth-path
 func createClientConfig(s *options.KubeletServer) (*restclient.Config, error) {
+	if s.RequireKubeConfig {
+		return kubeconfigClientConfig(s)
+	}
+
+	// TODO: handle a new --standalone flag that bypasses kubeconfig loading and returns no error.
+	// DEPRECATED: all subsequent code is deprecated
+	if len(s.APIServerList) == 0 {
+		return nil, fmt.Errorf("no api servers specified")
+	}
+	// TODO: adapt Kube client to support LB over several servers
+	if len(s.APIServerList) > 1 {
+		glog.Infof("Multiple api servers specified.  Picking first one")
+	}
+
 	if s.KubeConfig.Provided() && s.AuthPath.Provided() {
 		return nil, fmt.Errorf("cannot specify both --kubeconfig and --auth-path")
 	}
@@ -499,14 +547,6 @@ func createClientConfig(s *options.KubeletServer) (*restclient.Config, error) {
 // the configuration via addChaosToClientConfig. This func is exported to support
 // integration with third party kubelet extensions (e.g. kubernetes-mesos).
 func CreateAPIServerClientConfig(s *options.KubeletServer) (*restclient.Config, error) {
-	if len(s.APIServerList) < 1 {
-		return nil, fmt.Errorf("no api servers specified")
-	}
-	// TODO: adapt Kube client to support LB over several servers
-	if len(s.APIServerList) > 1 {
-		glog.Infof("Multiple api servers specified.  Picking first one")
-	}
-
 	clientConfig, err := createClientConfig(s)
 	if err != nil {
 		return nil, err
@@ -624,6 +664,7 @@ func SimpleKubelet(client *clientset.Clientset,
 		OutOfDiskTransitionFrequency: outOfDiskTransitionFrequency,
 		EvictionConfig:               evictionConfig,
 		PodsPerCore:                  podsPerCore,
+		ProtectKernelDefaults:        false,
 	}
 	return &kcfg
 }
@@ -876,6 +917,8 @@ type KubeletConfig struct {
 	HairpinMode                string
 	BabysitDaemons             bool
 	Options                    []kubelet.Option
+
+	ProtectKernelDefaults bool
 }
 
 func CreateAndInitKubelet(kc *KubeletConfig) (k KubeletBootstrap, pc *config.PodConfig, err error) {

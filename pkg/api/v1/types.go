@@ -167,7 +167,6 @@ type ObjectMeta struct {
 	// (scope and select) objects. May match selectors of replication controllers
 	// and services.
 	// More info: http://releases.k8s.io/HEAD/docs/user-guide/labels.md
-	// TODO: replace map[string]string with labels.LabelSet type
 	Labels map[string]string `json:"labels,omitempty" protobuf:"bytes,11,rep,name=labels"`
 
 	// Annotations is an unstructured key value map stored with a resource that may be
@@ -1089,12 +1088,12 @@ type Capabilities struct {
 // ResourceRequirements describes the compute resource requirements.
 type ResourceRequirements struct {
 	// Limits describes the maximum amount of compute resources allowed.
-	// More info: http://releases.k8s.io/HEAD/docs/design/resources.md#resource-specifications
+	// More info: http://kubernetes.io/docs/user-guide/compute-resources/
 	Limits ResourceList `json:"limits,omitempty" protobuf:"bytes,1,rep,name=limits,casttype=ResourceList,castkey=ResourceName"`
 	// Requests describes the minimum amount of compute resources required.
 	// If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
 	// otherwise to an implementation-defined value.
-	// More info: http://releases.k8s.io/HEAD/docs/design/resources.md#resource-specifications
+	// More info: http://kubernetes.io/docs/user-guide/compute-resources/
 	Requests ResourceList `json:"requests,omitempty" protobuf:"bytes,2,rep,name=requests,casttype=ResourceList,castkey=ResourceName"`
 }
 
@@ -2279,6 +2278,8 @@ type EndpointAddress struct {
 	IP string `json:"ip" protobuf:"bytes,1,opt,name=ip"`
 	// The Hostname of this endpoint
 	Hostname string `json:"hostname,omitempty" protobuf:"bytes,3,opt,name=hostname"`
+	// Optional: Node hosting this endpoint. This can be used to determine endpoints local to a node.
+	NodeName *string `json:"nodeName,omitempty" protobuf:"bytes,4,opt,name=nodeName"`
 	// Reference to object providing the endpoint.
 	TargetRef *ObjectReference `json:"targetRef,omitempty" protobuf:"bytes,2,opt,name=targetRef"`
 }
@@ -2376,6 +2377,7 @@ type NodeStatus struct {
 	Allocatable ResourceList `json:"allocatable,omitempty" protobuf:"bytes,2,rep,name=allocatable,casttype=ResourceList,castkey=ResourceName"`
 	// NodePhase is the recently observed lifecycle phase of the node.
 	// More info: http://releases.k8s.io/HEAD/docs/admin/node.md#node-phase
+	// The field is never populated, and now is deprecated.
 	Phase NodePhase `json:"phase,omitempty" protobuf:"bytes,3,opt,name=phase,casttype=NodePhase"`
 	// Conditions is an array of current observed node conditions.
 	// More info: http://releases.k8s.io/HEAD/docs/admin/node.md#node-condition

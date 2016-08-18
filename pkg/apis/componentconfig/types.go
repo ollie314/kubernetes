@@ -112,8 +112,9 @@ const (
 type KubeletConfiguration struct {
 	unversioned.TypeMeta
 
-	// config is the path to the config file or directory of files
-	Config string `json:"config"`
+	// podManifestPath is the path to the directory containing pod manifests to
+	// run, or the path to a single manifest file
+	PodManifestPath string `json:"podManifestPath"`
 	// syncFrequency is the max period between synchronizing running
 	// containers and config
 	SyncFrequency unversioned.Duration `json:"syncFrequency"`
@@ -396,6 +397,8 @@ type KubeletConfiguration struct {
 	// Currently only cpu and memory are supported. [default=none]
 	// See http://releases.k8s.io/HEAD/docs/user-guide/compute-resources.md for more detail.
 	KubeReserved utilconfig.ConfigurationMap `json:"kubeReserved"`
+	// Default behaviour for kernel tuning
+	ProtectKernelDefaults bool `json:"protectKernelDefaults"`
 }
 
 type KubeSchedulerConfiguration struct {
@@ -544,7 +547,7 @@ type KubeControllerManagerConfiguration struct {
 	DeploymentControllerSyncPeriod unversioned.Duration `json:"deploymentControllerSyncPeriod"`
 	// podEvictionTimeout is the grace period for deleting pods on failed nodes.
 	PodEvictionTimeout unversioned.Duration `json:"podEvictionTimeout"`
-	// deletingPodsQps is the number of nodes per second on which pods are deleted in
+	// DEPRECATED: deletingPodsQps is the number of nodes per second on which pods are deleted in
 	// case of node failure.
 	DeletingPodsQps float32 `json:"deletingPodsQps"`
 	// DEPRECATED: deletingPodsBurst is the number of nodes on which pods are bursty deleted in
@@ -610,6 +613,15 @@ type KubeControllerManagerConfiguration struct {
 	// concurrentGCSyncs is the number of garbage collector workers that are
 	// allowed to sync concurrently.
 	ConcurrentGCSyncs int32 `json:"concurrentGCSyncs"`
+	// nodeEvictionRate is the number of nodes per second on which pods are deleted in case of node failure when a zone is healthy
+	NodeEvictionRate float32 `json:"nodeEvictionRate"`
+	// secondaryNodeEvictionRate is the number of nodes per second on which pods are deleted in case of node failure when a zone is unhealty
+	SecondaryNodeEvictionRate float32 `json:"secondaryNodeEvictionRate"`
+	// secondaryNodeEvictionRate is implicitly overridden to 0 for clusters smaller than or equal to largeClusterSizeThreshold
+	LargeClusterSizeThreshold int32 `json:"largeClusterSizeThreshold"`
+	// Zone is treated as unhealthy in nodeEvictionRate and secondaryNodeEvictionRate when at least
+	// unhealthyZoneThreshold (no less than 3) of Nodes in the zone are NotReady
+	UnhealthyZoneThreshold float32 `json:"unhealthyZoneThreshold"`
 }
 
 // VolumeConfiguration contains *all* enumerated flags meant to configure all volume

@@ -16,7 +16,13 @@ api-servers
 api-token
 api-version
 apiserver-count
+audit-log-maxage
+audit-log-maxbackup
+audit-log-maxsize
+audit-log-path
 auth-path
+auth-provider
+auth-provider-arg
 authentication-token-webhook-cache-ttl
 authentication-token-webhook-config-file
 authorization-mode
@@ -270,6 +276,7 @@ kubelet-sync-frequency
 kubelet-timeout
 kubernetes-service-node-port
 label-columns
+large-cluster-size-threshold
 last-release-pr
 leader-elect
 leader-elect-lease-duration
@@ -283,6 +290,7 @@ log-flush-frequency
 long-running-request-regexp
 low-diskspace-threshold-mb
 make-symlinks
+manifest-path
 manifest-url
 manifest-url-header
 masquerade-all
@@ -328,6 +336,7 @@ network-plugin-dir
 no-headers
 no-suggestions
 node-cidr-mask-size
+node-eviction-rate
 node-instance-group
 node-ip
 node-labels
@@ -359,6 +368,7 @@ path-override
 pod-cidr
 pod-eviction-timeout
 pod-infra-container-image
+pod-manifest-path
 pod-running
 pods-per-core
 policy-config-file
@@ -367,6 +377,7 @@ portal-net
 prepull-images
 private-mountns
 prom-push-gateway
+protect-kernel-defaults
 proto-import
 proxy-bindall
 proxy-kubeconfig
@@ -401,6 +412,7 @@ repo-root
 report-dir
 report-prefix
 required-contexts
+require-kubeconfig
 resolv-conf
 resource-container
 resource-quota-sync-period
@@ -413,6 +425,7 @@ rkt-stage1-image
 root-ca-file
 root-dir
 run-proxy
+run-services-mode
 runtime-cgroups
 runtime-config
 runtime-request-timeout
@@ -422,6 +435,7 @@ scheduler-name
 schema-cache-dir
 scopes
 seccomp-profile-root
+secondary-node-eviction-rate
 secure-port
 serialize-image-pulls
 server-start-timeout
@@ -469,6 +483,7 @@ system-container
 system-pods-startup-timeout
 system-reserved
 target-port
+target-ram-mb
 tcp-services
 terminated-pod-gc-threshold
 test-timeout
@@ -480,6 +495,7 @@ ttl-secs
 type-src
 udp-port
 udp-timeout
+unhealthy-zone-threshold
 unix-socket
 update-period
 upgrade-target
@@ -496,3 +512,4 @@ whitelist-override-label
 windows-line-endings
 www-prefix
 zone-name
+garbage-collector-enabled

@@ -150,6 +150,53 @@ func filterHTTPError(err error, image string) error {
 	}
 }
 
+// Check if the inspected image matches what we are looking for
+func matchImageTagOrSHA(inspected dockertypes.ImageInspect, image string) bool {
+
+	// The image string follows the grammar specified here
+	// https://github.com/docker/distribution/blob/master/reference/reference.go#L4
+	named, err := dockerref.ParseNamed(image)
+	if err != nil {
+		glog.V(4).Infof("couldn't parse image reference %q: %v", image, err)
+		return false
+	}
+	_, isTagged := named.(dockerref.Tagged)
+	digest, isDigested := named.(dockerref.Digested)
+	if !isTagged && !isDigested {
+		// No Tag or SHA specified, so just return what we have
+		return true
+	}
+	if isTagged {
+		hostname, _ := dockerref.SplitHostname(named)
+		// Check the RepoTags for an exact match
+		for _, tag := range inspected.RepoTags {
+			// Deal with image with hostname specified
+			if len(hostname) > 0 {
+				if strings.HasSuffix(image, tag) {
+					return true
+				}
+
+			} else {
+				if tag == image {
+					// We found a specific tag that we were looking for
+					return true
+				}
+			}
+		}
+	}
+	if isDigested {
+		algo := digest.Digest().Algorithm().String()
+		sha := digest.Digest().Hex()
+		// Look specifically for short and long sha(s)
+		if strings.Contains(inspected.ID, algo+":"+sha) {
+			// We found the short or long SHA requested
+			return true
+		}
+	}
+	glog.V(4).Infof("Inspected image (%q) does not match %s", inspected.ID, image)
+	return false
+}
+
 // applyDefaultImageTag parses a docker image string, if it doesn't contain any tag or digest,
 // a default tag will be applied.
 func applyDefaultImageTag(image string) (string, error) {
@@ -396,7 +443,7 @@ func GetKubeletDockerContainers(client DockerInterface, allContainers bool) ([]*
 		// Skip containers that we didn't create to allow users to manually
 		// spin up their own containers if they want.
 		if !strings.HasPrefix(container.Names[0], "/"+containerNamePrefix+"_") {
-			glog.V(3).Infof("Docker Container: %s is not managed by kubelet.", container.Names[0])
+			glog.V(5).Infof("Docker Container: %s is not managed by kubelet.", container.Names[0])
 			continue
 		}
 		result = append(result, container)

@@ -319,9 +319,15 @@ func cleanupDensityTest(dtc DensityTestConfig) {
 		rcName := dtc.Configs[i].Name
 		rc, err := dtc.Client.ReplicationControllers(dtc.Namespace).Get(rcName)
 		if err == nil && rc.Spec.Replicas != 0 {
-			By("Cleaning up the replication controller")
-			err := framework.DeleteRC(dtc.Client, dtc.Namespace, rcName)
-			framework.ExpectNoError(err)
+			if framework.TestContext.GarbageCollectorEnabled {
+				By("Cleaning up only the replication controller, garbage collector will clean up the pods")
+				err := framework.DeleteRCAndWaitForGC(dtc.Client, dtc.Namespace, rcName)
+				framework.ExpectNoError(err)
+			} else {
+				By("Cleaning up the replication controller and pods")
+				err := framework.DeleteRCAndPods(dtc.Client, dtc.Namespace, rcName)
+				framework.ExpectNoError(err)
+			}
 		}
 	}
 }
@@ -389,9 +395,6 @@ var _ = framework.KubeDescribe("Density", func() {
 		masters, nodes = framework.GetMasterAndWorkerNodesOrDie(c)
 		nodeCount = len(nodes.Items)
 		Expect(nodeCount).NotTo(BeZero())
-		if nodeCount == 30 {
-			f.AddonResourceConstraints = func() map[string]framework.ResourceConstraint { return density30AddonResourceVerifier(nodeCount) }()
-		}
 
 		nodeCpuCapacity = nodes.Items[0].Status.Allocatable.Cpu().MilliValue()
 		nodeMemCapacity = nodes.Items[0].Status.Allocatable.Memory().Value()
@@ -444,6 +447,7 @@ var _ = framework.KubeDescribe("Density", func() {
 		switch testArg.podsPerNode {
 		case 30:
 			name = "[Feature:Performance] " + name
+			f.AddonResourceConstraints = func() map[string]framework.ResourceConstraint { return density30AddonResourceVerifier(nodeCount) }()
 		case 95:
 			name = "[Feature:HighDensityPerformance]" + name
 		default:

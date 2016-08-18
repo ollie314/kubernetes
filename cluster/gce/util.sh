@@ -39,7 +39,6 @@ fi
 
 function get_latest_gci_image() {
   # GCI milestone to use
-  # Update the GCI image in test/e2e_node/jenkins/image-config.yaml before updating the milestone here.
   GCI_MILESTONE="53"
 
   # First try to find an active (non-deprecated) image on this milestone.
@@ -1533,7 +1532,7 @@ function ssh-to-node {
   local node="$1"
   local cmd="$2"
   # Loop until we can successfully ssh into the box
-  for try in $(seq 1 5); do
+  for try in {1..5}; do
     if gcloud compute ssh --ssh-flag="-o LogLevel=quiet" --ssh-flag="-o ConnectTimeout=30" --project "${PROJECT}" --zone="${ZONE}" "${node}" --command "echo test > /dev/null"; then
       break
     fi

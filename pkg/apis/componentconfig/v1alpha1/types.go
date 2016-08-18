@@ -166,8 +166,9 @@ type LeaderElectionConfiguration struct {
 type KubeletConfiguration struct {
 	unversioned.TypeMeta
 
-	// config is the path to the config file or directory of files
-	Config string `json:"config"`
+	// podManifestPath is the path to the directory containing pod manifests to
+	// run, or the path to a single manifest file
+	PodManifestPath string `json:"podManifestPath"`
 	// syncFrequency is the max period between synchronizing running
 	// containers and config
 	SyncFrequency unversioned.Duration `json:"syncFrequency"`
@@ -451,4 +452,6 @@ type KubeletConfiguration struct {
 	// Currently only cpu and memory are supported. [default=none]
 	// See http://releases.k8s.io/HEAD/docs/user-guide/compute-resources.md for more detail.
 	KubeReserved map[string]string `json:"kubeReserved"`
+	// Default behaviour for kernel tuning
+	ProtectKernelDefaults bool `json:"protectKernelDefaults"`
 }

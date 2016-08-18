@@ -19,6 +19,7 @@ package etcd
 import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/registry/cachesize"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/registry/generic/registry"
 	"k8s.io/kubernetes/pkg/registry/storageclass"
@@ -36,8 +37,8 @@ func NewREST(opts generic.RESTOptions) *REST {
 
 	newListFunc := func() runtime.Object { return &extensions.StorageClassList{} }
 	storageInterface := opts.Decorator(
-		opts.Storage,
-		100,
+		opts.StorageConfig,
+		cachesize.GetWatchCacheSizeByResource(cachesize.StorageClasses),
 		&extensions.StorageClass{},
 		prefix,
 		storageclass.Strategy,

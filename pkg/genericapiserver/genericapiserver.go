@@ -30,6 +30,12 @@ import (
 	"strings"
 	"time"
 
+	systemd "github.com/coreos/go-systemd/daemon"
+	"github.com/emicklei/go-restful"
+	"github.com/emicklei/go-restful/swagger"
+	"github.com/golang/glog"
+	"gopkg.in/natefinch/lumberjack.v2"
+
 	"k8s.io/kubernetes/pkg/admission"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/rest"
@@ -37,11 +43,13 @@ import (
 	"k8s.io/kubernetes/pkg/apimachinery"
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/apiserver"
+	"k8s.io/kubernetes/pkg/apiserver/audit"
 	"k8s.io/kubernetes/pkg/auth/authenticator"
 	"k8s.io/kubernetes/pkg/auth/authorizer"
 	"k8s.io/kubernetes/pkg/auth/handlers"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/genericapiserver/options"
+	genericvalidation "k8s.io/kubernetes/pkg/genericapiserver/validation"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/registry/generic/registry"
 	ipallocator "k8s.io/kubernetes/pkg/registry/service/ipallocator"
@@ -53,11 +61,6 @@ import (
 	utilnet "k8s.io/kubernetes/pkg/util/net"
 	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
 	"k8s.io/kubernetes/pkg/util/sets"
-
-	systemd "github.com/coreos/go-systemd/daemon"
-	"github.com/emicklei/go-restful"
-	"github.com/emicklei/go-restful/swagger"
-	"github.com/golang/glog"
 )
 
 const globalTimeout = time.Minute
@@ -95,7 +98,11 @@ type APIGroupInfo struct {
 // Config is a structure used to configure a GenericAPIServer.
 type Config struct {
 	// The storage factory for other objects
-	StorageFactory StorageFactory
+	StorageFactory     StorageFactory
+	AuditLogPath       string
+	AuditLogMaxAge     int
+	AuditLogMaxBackups int
+	AuditLogMaxSize    int
 	// allow downstream consumers to disable the core controller loops
 	EnableLogsSupport bool
 	EnableUISupport   bool
@@ -442,7 +449,7 @@ func (s *GenericAPIServer) init(c *Config) {
 	}
 
 	if c.EnableLogsSupport {
-		apiserver.InstallLogsSupport(s.MuxHelper)
+		apiserver.InstallLogsSupport(s.MuxHelper, s.HandlerContainer)
 	}
 	if c.EnableUISupport {
 		ui.InstallSupport(s.MuxHelper, s.enableSwaggerSupport && s.enableSwaggerUI)
@@ -459,8 +466,8 @@ func (s *GenericAPIServer) init(c *Config) {
 	handler := http.Handler(s.mux.(*http.ServeMux))
 
 	// TODO: handle CORS and auth using go-restful
-	// See github.com/emicklei/go-restful/blob/GenericAPIServer/examples/restful-CORS-filter.go, and
-	// github.com/emicklei/go-restful/blob/GenericAPIServer/examples/restful-basic-authentication.go
+	// See github.com/emicklei/go-restful/blob/master/examples/restful-CORS-filter.go, and
+	// github.com/emicklei/go-restful/blob/master/examples/restful-basic-authentication.go
 
 	if len(c.CorsAllowedOriginList) > 0 {
 		allowedOriginRegexps, err := util.CompileRegexps(c.CorsAllowedOriginList)
@@ -474,6 +481,17 @@ func (s *GenericAPIServer) init(c *Config) {
 
 	attributeGetter := apiserver.NewRequestAttributeGetter(s.RequestContextMapper, s.NewRequestInfoResolver())
 	handler = apiserver.WithAuthorizationCheck(handler, attributeGetter, s.authorizer)
+	if len(c.AuditLogPath) != 0 {
+		// audit handler must comes before the impersonationFilter to read the original user
+		writer := &lumberjack.Logger{
+			Filename:   c.AuditLogPath,
+			MaxAge:     c.AuditLogMaxAge,
+			MaxBackups: c.AuditLogMaxBackups,
+			MaxSize:    c.AuditLogMaxSize,
+		}
+		handler = audit.WithAudit(handler, s.RequestContextMapper, writer)
+		defer writer.Close()
+	}
 	handler = apiserver.WithImpersonation(handler, s.RequestContextMapper, s.authorizer)
 
 	// Install Authenticator
@@ -489,17 +507,18 @@ func (s *GenericAPIServer) init(c *Config) {
 	s.Handler = handler
 
 	// After all wrapping is done, put a context filter around both handlers
-	if handler, err := api.NewRequestContextFilter(s.RequestContextMapper, s.Handler); err != nil {
+	var err error
+	handler, err = api.NewRequestContextFilter(s.RequestContextMapper, s.Handler)
+	if err != nil {
 		glog.Fatalf("Could not initialize request context filter for s.Handler: %v", err)
-	} else {
-		s.Handler = handler
 	}
+	s.Handler = handler
 
-	if handler, err := api.NewRequestContextFilter(s.RequestContextMapper, s.InsecureHandler); err != nil {
+	handler, err = api.NewRequestContextFilter(s.RequestContextMapper, s.InsecureHandler)
+	if err != nil {
 		glog.Fatalf("Could not initialize request context filter for s.InsecureHandler: %v", err)
-	} else {
-		s.InsecureHandler = handler
 	}
+	s.InsecureHandler = handler
 
 	s.installGroupsDiscoveryHandler()
 }
@@ -536,22 +555,15 @@ func (s *GenericAPIServer) installGroupsDiscoveryHandler() {
 	})
 }
 
-// TODO: Longer term we should read this from some config store, rather than a flag.
-func verifyClusterIPFlags(options *options.ServerRunOptions) {
-	if options.ServiceClusterIPRange.IP == nil {
-		glog.Fatal("No --service-cluster-ip-range specified")
-	}
-	var ones, bits = options.ServiceClusterIPRange.Mask.Size()
-	if bits-ones > 20 {
-		glog.Fatal("Specified --service-cluster-ip-range is too large")
-	}
-}
-
 func NewConfig(options *options.ServerRunOptions) *Config {
 	return &Config{
 		APIGroupPrefix:            options.APIGroupPrefix,
 		APIPrefix:                 options.APIPrefix,
 		CorsAllowedOriginList:     options.CorsAllowedOriginList,
+		AuditLogPath:              options.AuditLogPath,
+		AuditLogMaxAge:            options.AuditLogMaxAge,
+		AuditLogMaxBackups:        options.AuditLogMaxBackups,
+		AuditLogMaxSize:           options.AuditLogMaxSize,
 		EnableIndex:               true,
 		EnableLogsSupport:         options.EnableLogsSupport,
 		EnableProfiling:           options.EnableProfiling,
@@ -570,46 +582,8 @@ func NewConfig(options *options.ServerRunOptions) *Config {
 	}
 }
 
-func verifyServiceNodePort(options *options.ServerRunOptions) {
-	if options.KubernetesServiceNodePort < 0 || options.KubernetesServiceNodePort > 65535 {
-		glog.Fatalf("--kubernetes-service-node-port %v must be between 0 and 65535, inclusive. If 0, the Kubernetes master service will be of type ClusterIP.", options.KubernetesServiceNodePort)
-	}
-
-	if options.KubernetesServiceNodePort > 0 && !options.ServiceNodePortRange.Contains(options.KubernetesServiceNodePort) {
-		glog.Fatalf("Kubernetes service port range %v doesn't contain %v", options.ServiceNodePortRange, (options.KubernetesServiceNodePort))
-	}
-}
-
-func verifyEtcdServersList(options *options.ServerRunOptions) {
-	if len(options.StorageConfig.ServerList) == 0 {
-		glog.Fatalf("--etcd-servers must be specified")
-	}
-}
-
-func verifySecureAndInsecurePort(options *options.ServerRunOptions) {
-	if options.SecurePort < 0 || options.SecurePort > 65535 {
-		glog.Fatalf("--secure-port %v must be between 0 and 65535, inclusive. 0 for turning off secure port.", options.SecurePort)
-	}
-
-	// TODO: Allow 0 to turn off insecure port.
-	if options.InsecurePort < 1 || options.InsecurePort > 65535 {
-		glog.Fatalf("--insecure-port %v must be between 1 and 65535, inclusive.", options.InsecurePort)
-	}
-
-	if options.SecurePort == options.InsecurePort {
-		glog.Fatalf("--secure-port and --insecure-port cannot use the same port.")
-	}
-}
-
-func ValidateRunOptions(options *options.ServerRunOptions) {
-	verifyClusterIPFlags(options)
-	verifyServiceNodePort(options)
-	verifyEtcdServersList(options)
-	verifySecureAndInsecurePort(options)
-}
-
 func DefaultAndValidateRunOptions(options *options.ServerRunOptions) {
-	ValidateRunOptions(options)
+	genericvalidation.ValidateRunOptions(options)
 
 	// If advertise-address is not specified, use bind-address. If bind-address
 	// is not usable (unset, 0.0.0.0, or loopback), we will use the host's default
@@ -681,10 +655,10 @@ func (s *GenericAPIServer) Run(options *options.ServerRunOptions) {
 	}
 
 	if secureLocation != "" {
-		handler := apiserver.TimeoutHandler(s.Handler, longRunningTimeout)
+		handler := apiserver.TimeoutHandler(apiserver.RecoverPanics(s.Handler), longRunningTimeout)
 		secureServer := &http.Server{
 			Addr:           secureLocation,
-			Handler:        apiserver.MaxInFlightLimit(sem, longRunningRequestCheck, apiserver.RecoverPanics(handler)),
+			Handler:        apiserver.MaxInFlightLimit(sem, longRunningRequestCheck, handler),
 			MaxHeaderBytes: 1 << 20,
 			TLSConfig: &tls.Config{
 				// Can't use SSLv3 because of POODLE and BEAST
@@ -744,10 +718,10 @@ func (s *GenericAPIServer) Run(options *options.ServerRunOptions) {
 		}
 	}
 
-	handler := apiserver.TimeoutHandler(s.InsecureHandler, longRunningTimeout)
+	handler := apiserver.TimeoutHandler(apiserver.RecoverPanics(s.InsecureHandler), longRunningTimeout)
 	http := &http.Server{
 		Addr:           insecureLocation,
-		Handler:        apiserver.RecoverPanics(handler),
+		Handler:        handler,
 		MaxHeaderBytes: 1 << 20,
 	}
 
