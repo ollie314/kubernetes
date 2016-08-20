@@ -27,6 +27,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/componentconfig"
 	"k8s.io/kubernetes/pkg/client/leaderelection"
 	"k8s.io/kubernetes/pkg/master/ports"
+	"k8s.io/kubernetes/pkg/util/config"
 
 	"github.com/spf13/pflag"
 )
@@ -93,7 +94,7 @@ func NewCMServer() *CMServer {
 			LeaderElection:          leaderelection.DefaultLeaderElectionConfiguration(),
 			ControllerStartInterval: unversioned.Duration{Duration: 0 * time.Second},
 			EnableGarbageCollector:  false,
-			ConcurrentGCSyncs:       5,
+			ConcurrentGCSyncs:       100,
 			ClusterSigningCertFile:  "/etc/kubernetes/ca/ca.pem",
 			ClusterSigningKeyFile:   "/etc/kubernetes/ca/ca.key",
 		},
@@ -180,4 +181,5 @@ func (s *CMServer) AddFlags(fs *pflag.FlagSet) {
 	fs.Float32Var(&s.UnhealthyZoneThreshold, "unhealthy-zone-threshold", 0.55, "Fraction of Nodes in a zone which needs to be not Ready (minimum 3) for zone to be treated as unhealthy. ")
 
 	leaderelection.BindFlags(&s.LeaderElection, fs)
+	config.DefaultFeatureGate.AddFlag(fs)
 }

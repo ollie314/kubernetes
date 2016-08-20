@@ -96,6 +96,7 @@ pkg/credentialprovider/aws
 pkg/hyperkube
 pkg/kubelet/api
 pkg/kubelet/container
+pkg/kubelet/eviction
 pkg/kubelet/envvars
 pkg/kubelet/util/format
 pkg/kubelet/util/ioutils
@@ -197,3 +198,8 @@ test/integration/openshift
 test/soak/cauldron
 test/soak/serve_hostnames
 third_party/forked/golang/expansion
+pkg/util/maps
+pkg/volume/quobyte
+test/integration/discoverysummarizer
+test/integration/examples
+test/integration/federation

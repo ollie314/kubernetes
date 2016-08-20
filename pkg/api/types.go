@@ -209,6 +209,10 @@ type VolumeSource struct {
 	PersistentVolumeClaim *PersistentVolumeClaimVolumeSource `json:"persistentVolumeClaim,omitempty"`
 	// RBD represents a Rados Block Device mount on the host that shares a pod's lifetime
 	RBD *RBDVolumeSource `json:"rbd,omitempty"`
+
+	// Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
+	Quobyte *QuobyteVolumeSource `json:"quobyte,omitempty"`
+
 	// FlexVolume represents a generic volume resource that is
 	// provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.
 	FlexVolume *FlexVolumeSource `json:"flexVolume,omitempty"`
@@ -254,6 +258,8 @@ type PersistentVolumeSource struct {
 	NFS *NFSVolumeSource `json:"nfs,omitempty"`
 	// RBD represents a Rados Block Device mount on the host that shares a pod's lifetime
 	RBD *RBDVolumeSource `json:"rbd,omitempty"`
+	// Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
+	Quobyte *QuobyteVolumeSource `json:"quobyte,omitempty"`
 	// ISCSIVolumeSource represents an ISCSI resource that is attached to a
 	// kubelet's host machine and then exposed to the pod.
 	ISCSI *ISCSIVolumeSource `json:"iscsi,omitempty"`
@@ -606,6 +612,12 @@ type SecretVolumeSource struct {
 	// the volume setup will error. Paths must be relative and may not contain
 	// the '..' path or start with '..'.
 	Items []KeyToPath `json:"items,omitempty"`
+	// Mode bits to use on created files by default. Must be a value between
+	// 0 and 0777.
+	// Directories within the path are not affected by this setting.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	DefaultMode *int32 `json:"defaultMode,omitempty"`
 }
 
 // Represents an NFS mount that lasts the lifetime of a pod.
@@ -620,6 +632,30 @@ type NFSVolumeSource struct {
 	// Optional: Defaults to false (read/write). ReadOnly here will force
 	// the NFS export to be mounted with read-only permissions
 	ReadOnly bool `json:"readOnly,omitempty"`
+}
+
+// Represents a Quobyte mount that lasts the lifetime of a pod.
+// Quobyte volumes do not support ownership management or SELinux relabeling.
+type QuobyteVolumeSource struct {
+	// Registry represents a single or multiple Quobyte Registry services
+	// specified as a string as host:port pair (multiple entries are separated with commas)
+	// which acts as the central registry for volumes
+	Registry string `json:"registry"`
+
+	// Volume is a string that references an already created Quobyte volume by name.
+	Volume string `json:"volume"`
+
+	// Defaults to false (read/write). ReadOnly here will force
+	// the Quobyte to be mounted with read-only permissions
+	ReadOnly bool `json:"readOnly,omitempty"`
+
+	// User to map volume access to
+	// Defaults to the root user
+	User string `json:"user,omitempty"`
+
+	// Group to map volume access to
+	// Default is no group
+	Group string `json:"group,omitempty"`
 }
 
 // Represents a Glusterfs mount that lasts the lifetime of a pod.
@@ -707,6 +743,12 @@ type FlockerVolumeSource struct {
 type DownwardAPIVolumeSource struct {
 	// Items is a list of DownwardAPIVolume file
 	Items []DownwardAPIVolumeFile `json:"items,omitempty"`
+	// Mode bits to use on created files by default. Must be a value between
+	// 0 and 0777.
+	// Directories within the path are not affected by this setting.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	DefaultMode *int32 `json:"defaultMode,omitempty"`
 }
 
 // Represents a single file containing information from the downward API
@@ -718,6 +760,11 @@ type DownwardAPIVolumeFile struct {
 	// Selects a resource of the container: only resources limits and requests
 	// (limits.cpu, limits.memory, requests.cpu and requests.memory) are currently supported.
 	ResourceFieldRef *ResourceFieldSelector `json:"resourceFieldRef,omitempty"`
+	// Optional: mode bits to use on this file, must be a value between 0
+	// and 0777. If not specified, the volume defaultMode will be used.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	Mode *int32 `json:"mode,omitempty"`
 }
 
 // AzureFile represents an Azure File Service mount on the host and bind mount to the pod.
@@ -757,6 +804,12 @@ type ConfigMapVolumeSource struct {
 	// the volume setup will error. Paths must be relative and may not contain
 	// the '..' path or start with '..'.
 	Items []KeyToPath `json:"items,omitempty"`
+	// Mode bits to use on created files by default. Must be a value between
+	// 0 and 0777.
+	// Directories within the path are not affected by this setting.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	DefaultMode *int32 `json:"defaultMode,omitempty"`
 }
 
 // Maps a string key to a path within a volume.
@@ -769,6 +822,11 @@ type KeyToPath struct {
 	// May not contain the path element '..'.
 	// May not start with the string '..'.
 	Path string `json:"path"`
+	// Optional: mode bits to use on this file, should be a value between 0
+	// and 0777. If not specified, the volume defaultMode will be used.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	Mode *int32 `json:"mode,omitempty"`
 }
 
 // ContainerPort represents a network port in a single container
@@ -1703,6 +1761,11 @@ const (
 	// external load balancer (if the cloud provider supports it), in addition
 	// to 'NodePort' type.
 	ServiceTypeLoadBalancer ServiceType = "LoadBalancer"
+
+	// ServiceTypeExternalName means a service consists of only a reference to
+	// an external name that kubedns or equivalent will return as a CNAME
+	// record, with no exposing or proxying of any pods involved.
+	ServiceTypeExternalName ServiceType = "ExternalName"
 )
 
 // ServiceStatus represents the current status of a service
@@ -1733,23 +1796,48 @@ type LoadBalancerIngress struct {
 
 // ServiceSpec describes the attributes that a user creates on a service
 type ServiceSpec struct {
-	// Type determines how the service will be exposed.  Valid options: ClusterIP, NodePort, LoadBalancer
+	// Type determines how the Service is exposed. Defaults to ClusterIP. Valid
+	// options are ExternalName, ClusterIP, NodePort, and LoadBalancer.
+	// "ExternalName" maps to the specified externalName.
+	// "ClusterIP" allocates a cluster-internal IP address for load-balancing to
+	// endpoints. Endpoints are determined by the selector or if that is not
+	// specified, by manual construction of an Endpoints object. If clusterIP is
+	// "None", no virtual IP is allocated and the endpoints are published as a
+	// set of endpoints rather than a stable IP.
+	// "NodePort" builds on ClusterIP and allocates a port on every node which
+	// routes to the clusterIP.
+	// "LoadBalancer" builds on NodePort and creates an
+	// external load-balancer (if supported in the current cloud) which routes
+	// to the clusterIP.
+	// More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#overview
 	Type ServiceType `json:"type,omitempty"`
 
 	// Required: The list of ports that are exposed by this service.
 	Ports []ServicePort `json:"ports"`
 
-	// This service will route traffic to pods having labels matching this selector. If empty or not present,
-	// the service is assumed to have endpoints set by an external process and Kubernetes will not modify
-	// those endpoints.
+	// Route service traffic to pods with label keys and values matching this
+	// selector. If empty or not present, the service is assumed to have an
+	// external process managing its endpoints, which Kubernetes will not
+	// modify. Only applies to types ClusterIP, NodePort, and LoadBalancer.
+	// Ignored if type is ExternalName.
+	// More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#overview
 	Selector map[string]string `json:"selector"`
 
-	// ClusterIP is usually assigned by the master.  If specified by the user
-	// we will try to respect it or else fail the request.  This field can
-	// not be changed by updates.
-	// Valid values are None, empty string (""), or a valid IP address
-	// None can be specified for headless services when proxying is not required
+	// ClusterIP is the IP address of the service and is usually assigned
+	// randomly by the master. If an address is specified manually and is not in
+	// use by others, it will be allocated to the service; otherwise, creation
+	// of the service will fail. This field can not be changed through updates.
+	// Valid values are "None", empty string (""), or a valid IP address. "None"
+	// can be specified for headless services when proxying is not required.
+	// Only applies to types ClusterIP, NodePort, and LoadBalancer. Ignored if
+	// type is ExternalName.
+	// More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#virtual-ips-and-service-proxies
 	ClusterIP string `json:"clusterIP,omitempty"`
+
+	// ExternalName is the external reference that kubedns or equivalent will
+	// return as a CNAME record for this service. No proxying will be involved.
+	// Must be a valid DNS name and requires Type to be ExternalName.
+	ExternalName string
 
 	// ExternalIPs are used by external load balancers, or can be set by
 	// users to handle external traffic that arrives at a node.

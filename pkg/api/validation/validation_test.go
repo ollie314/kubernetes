@@ -675,6 +675,28 @@ func TestValidatePersistentVolumeClaim(t *testing.T) {
 				},
 			}),
 		},
+		"negative-storage-request": {
+			isExpectedFailure: true,
+			claim: testVolumeClaim("foo", "ns", api.PersistentVolumeClaimSpec{
+				Selector: &unversioned.LabelSelector{
+					MatchExpressions: []unversioned.LabelSelectorRequirement{
+						{
+							Key:      "key2",
+							Operator: "Exists",
+						},
+					},
+				},
+				AccessModes: []api.PersistentVolumeAccessMode{
+					api.ReadWriteOnce,
+					api.ReadOnlyMany,
+				},
+				Resources: api.ResourceRequirements{
+					Requests: api.ResourceList{
+						api.ResourceName(api.ResourceStorage): resource.MustParse("-10G"),
+					},
+				},
+			}),
+		},
 	}
 
 	for name, scenario := range scenarios {
@@ -795,6 +817,10 @@ func TestValidateKeyToPath(t *testing.T) {
 			ok: true,
 		},
 		{
+			kp: api.KeyToPath{Key: "k", Path: "p", Mode: newInt32(0644)},
+			ok: true,
+		},
+		{
 			kp:      api.KeyToPath{Key: "", Path: "p"},
 			ok:      false,
 			errtype: field.ErrorTypeRequired,
@@ -821,6 +847,16 @@ func TestValidateKeyToPath(t *testing.T) {
 		},
 		{
 			kp:      api.KeyToPath{Key: "k", Path: "p/.."},
+			ok:      false,
+			errtype: field.ErrorTypeInvalid,
+		},
+		{
+			kp:      api.KeyToPath{Key: "k", Path: "p", Mode: newInt32(01000)},
+			ok:      false,
+			errtype: field.ErrorTypeInvalid,
+		},
+		{
+			kp:      api.KeyToPath{Key: "k", Path: "p", Mode: newInt32(-1)},
 			ok:      false,
 			errtype: field.ErrorTypeInvalid,
 		},
@@ -1129,7 +1165,19 @@ func TestValidateVolumes(t *testing.T) {
 			},
 		},
 		{
-			name: "valid Secret with projection",
+			name: "valid Secret with defaultMode",
+			vol: api.Volume{
+				Name: "secret",
+				VolumeSource: api.VolumeSource{
+					Secret: &api.SecretVolumeSource{
+						SecretName:  "my-secret",
+						DefaultMode: newInt32(0644),
+					},
+				},
+			},
+		},
+		{
+			name: "valid Secret with projection and mode",
 			vol: api.Volume{
 				Name: "secret",
 				VolumeSource: api.VolumeSource{
@@ -1138,6 +1186,7 @@ func TestValidateVolumes(t *testing.T) {
 						Items: []api.KeyToPath{{
 							Key:  "key",
 							Path: "filename",
+							Mode: newInt32(0644),
 						}},
 					},
 				},
@@ -1200,6 +1249,34 @@ func TestValidateVolumes(t *testing.T) {
 			errtype:  field.ErrorTypeInvalid,
 			errfield: "secret.items[0].path",
 		},
+		{
+			name: "secret with invalid positive defaultMode",
+			vol: api.Volume{
+				Name: "secret",
+				VolumeSource: api.VolumeSource{
+					Secret: &api.SecretVolumeSource{
+						SecretName:  "s",
+						DefaultMode: newInt32(01000),
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "secret.defaultMode",
+		},
+		{
+			name: "secret with invalid negative defaultMode",
+			vol: api.Volume{
+				Name: "secret",
+				VolumeSource: api.VolumeSource{
+					Secret: &api.SecretVolumeSource{
+						SecretName:  "s",
+						DefaultMode: newInt32(-1),
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "secret.defaultMode",
+		},
 		// ConfigMap
 		{
 			name: "valid ConfigMap",
@@ -1215,7 +1292,21 @@ func TestValidateVolumes(t *testing.T) {
 			},
 		},
 		{
-			name: "valid ConfigMap with projection",
+			name: "valid ConfigMap with defaultMode",
+			vol: api.Volume{
+				Name: "cfgmap",
+				VolumeSource: api.VolumeSource{
+					ConfigMap: &api.ConfigMapVolumeSource{
+						LocalObjectReference: api.LocalObjectReference{
+							Name: "my-cfgmap",
+						},
+						DefaultMode: newInt32(0644),
+					},
+				},
+			},
+		},
+		{
+			name: "valid ConfigMap with projection and mode",
 			vol: api.Volume{
 				Name: "cfgmap",
 				VolumeSource: api.VolumeSource{
@@ -1225,6 +1316,7 @@ func TestValidateVolumes(t *testing.T) {
 						Items: []api.KeyToPath{{
 							Key:  "key",
 							Path: "filename",
+							Mode: newInt32(0644),
 						}},
 					},
 				},
@@ -1287,6 +1379,34 @@ func TestValidateVolumes(t *testing.T) {
 			},
 			errtype:  field.ErrorTypeInvalid,
 			errfield: "configMap.items[0].path",
+		},
+		{
+			name: "configmap with invalid positive defaultMode",
+			vol: api.Volume{
+				Name: "cfgmap",
+				VolumeSource: api.VolumeSource{
+					ConfigMap: &api.ConfigMapVolumeSource{
+						LocalObjectReference: api.LocalObjectReference{Name: "c"},
+						DefaultMode:          newInt32(01000),
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "configMap.defaultMode",
+		},
+		{
+			name: "configmap with invalid negative defaultMode",
+			vol: api.Volume{
+				Name: "cfgmap",
+				VolumeSource: api.VolumeSource{
+					ConfigMap: &api.ConfigMapVolumeSource{
+						LocalObjectReference: api.LocalObjectReference{Name: "c"},
+						DefaultMode:          newInt32(-1),
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "configMap.defaultMode",
 		},
 		// Glusterfs
 		{
@@ -1552,6 +1672,75 @@ func TestValidateVolumes(t *testing.T) {
 			},
 		},
 		{
+			name: "downapi valid defaultMode",
+			vol: api.Volume{
+				Name: "downapi",
+				VolumeSource: api.VolumeSource{
+					DownwardAPI: &api.DownwardAPIVolumeSource{
+						DefaultMode: newInt32(0644),
+					},
+				},
+			},
+		},
+		{
+			name: "downapi valid item mode",
+			vol: api.Volume{
+				Name: "downapi",
+				VolumeSource: api.VolumeSource{
+					DownwardAPI: &api.DownwardAPIVolumeSource{
+						Items: []api.DownwardAPIVolumeFile{{
+							Mode: newInt32(0644),
+							Path: "path",
+							FieldRef: &api.ObjectFieldSelector{
+								APIVersion: "v1",
+								FieldPath:  "metadata.labels",
+							},
+						}},
+					},
+				},
+			},
+		},
+		{
+			name: "downapi invalid positive item mode",
+			vol: api.Volume{
+				Name: "downapi",
+				VolumeSource: api.VolumeSource{
+					DownwardAPI: &api.DownwardAPIVolumeSource{
+						Items: []api.DownwardAPIVolumeFile{{
+							Mode: newInt32(01000),
+							Path: "path",
+							FieldRef: &api.ObjectFieldSelector{
+								APIVersion: "v1",
+								FieldPath:  "metadata.labels",
+							},
+						}},
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "downwardAPI.mode",
+		},
+		{
+			name: "downapi invalid negative item mode",
+			vol: api.Volume{
+				Name: "downapi",
+				VolumeSource: api.VolumeSource{
+					DownwardAPI: &api.DownwardAPIVolumeSource{
+						Items: []api.DownwardAPIVolumeFile{{
+							Mode: newInt32(-1),
+							Path: "path",
+							FieldRef: &api.ObjectFieldSelector{
+								APIVersion: "v1",
+								FieldPath:  "metadata.labels",
+							},
+						}},
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "downwardAPI.mode",
+		},
+		{
 			name: "downapi empty metatada path",
 			vol: api.Volume{
 				Name: "downapi",
@@ -1673,6 +1862,32 @@ func TestValidateVolumes(t *testing.T) {
 			errfield:  "downwardAPI",
 			errdetail: "fieldRef and resourceFieldRef can not be specified simultaneously",
 		},
+		{
+			name: "downapi invalid positive defaultMode",
+			vol: api.Volume{
+				Name: "downapi",
+				VolumeSource: api.VolumeSource{
+					DownwardAPI: &api.DownwardAPIVolumeSource{
+						DefaultMode: newInt32(01000),
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "downwardAPI.defaultMode",
+		},
+		{
+			name: "downapi invalid negative defaultMode",
+			vol: api.Volume{
+				Name: "downapi",
+				VolumeSource: api.VolumeSource{
+					DownwardAPI: &api.DownwardAPIVolumeSource{
+						DefaultMode: newInt32(-1),
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "downwardAPI.defaultMode",
+		},
 		// FC
 		{
 			name: "valid FC",
@@ -1776,6 +1991,76 @@ func TestValidateVolumes(t *testing.T) {
 			},
 			errtype:  field.ErrorTypeRequired,
 			errfield: "azureFile.shareName",
+		},
+		// Quobyte
+		{
+			name: "valid Quobyte",
+			vol: api.Volume{
+				Name: "quobyte",
+				VolumeSource: api.VolumeSource{
+					Quobyte: &api.QuobyteVolumeSource{
+						Registry: "registry:7861",
+						Volume:   "volume",
+						ReadOnly: false,
+						User:     "root",
+						Group:    "root",
+					},
+				},
+			},
+		},
+		{
+			name: "empty registry quobyte",
+			vol: api.Volume{
+				Name: "quobyte",
+				VolumeSource: api.VolumeSource{
+					Quobyte: &api.QuobyteVolumeSource{
+						Volume: "/test",
+					},
+				},
+			},
+			errtype:  field.ErrorTypeRequired,
+			errfield: "quobyte.registry",
+		},
+		{
+			name: "wrong format registry quobyte",
+			vol: api.Volume{
+				Name: "quobyte",
+				VolumeSource: api.VolumeSource{
+					Quobyte: &api.QuobyteVolumeSource{
+						Registry: "registry7861",
+						Volume:   "/test",
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "quobyte.registry",
+		},
+		{
+			name: "wrong format multiple registries quobyte",
+			vol: api.Volume{
+				Name: "quobyte",
+				VolumeSource: api.VolumeSource{
+					Quobyte: &api.QuobyteVolumeSource{
+						Registry: "registry:7861,reg2",
+						Volume:   "/test",
+					},
+				},
+			},
+			errtype:  field.ErrorTypeInvalid,
+			errfield: "quobyte.registry",
+		},
+		{
+			name: "empty volume quobyte",
+			vol: api.Volume{
+				Name: "quobyte",
+				VolumeSource: api.VolumeSource{
+					Quobyte: &api.QuobyteVolumeSource{
+						Registry: "registry:7861",
+					},
+				},
+			},
+			errtype:  field.ErrorTypeRequired,
+			errfield: "quobyte.volume",
 		},
 	}
 
@@ -4697,6 +4982,42 @@ func TestValidateService(t *testing.T) {
 			},
 			numErrs: 1,
 		},
+		{
+			name: "valid ExternalName",
+			tweakSvc: func(s *api.Service) {
+				s.Spec.Type = api.ServiceTypeExternalName
+				s.Spec.ClusterIP = ""
+				s.Spec.ExternalName = "foo.bar.example.com"
+			},
+			numErrs: 0,
+		},
+		{
+			name: "invalid ExternalName clusterIP (valid IP)",
+			tweakSvc: func(s *api.Service) {
+				s.Spec.Type = api.ServiceTypeExternalName
+				s.Spec.ClusterIP = "1.2.3.4"
+				s.Spec.ExternalName = "foo.bar.example.com"
+			},
+			numErrs: 1,
+		},
+		{
+			name: "invalid ExternalName clusterIP (None)",
+			tweakSvc: func(s *api.Service) {
+				s.Spec.Type = api.ServiceTypeExternalName
+				s.Spec.ClusterIP = "None"
+				s.Spec.ExternalName = "foo.bar.example.com"
+			},
+			numErrs: 1,
+		},
+		{
+			name: "invalid ExternalName (not a DNS name)",
+			tweakSvc: func(s *api.Service) {
+				s.Spec.Type = api.ServiceTypeExternalName
+				s.Spec.ClusterIP = ""
+				s.Spec.ExternalName = "-123"
+			},
+			numErrs: 1,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -5329,7 +5650,6 @@ func TestValidateNode(t *testing.T) {
 			},
 		},
 		"missing-taint-key": {
-
 			ObjectMeta: api.ObjectMeta{
 				Name: "dedicated-node1",
 				// Add a taint with an empty key to a node
@@ -5435,6 +5755,27 @@ func TestValidateNode(t *testing.T) {
 				Capacity: api.ResourceList{
 					api.ResourceName(api.ResourceCPU):    resource.MustParse("10"),
 					api.ResourceName(api.ResourceMemory): resource.MustParse("0"),
+				},
+			},
+			Spec: api.NodeSpec{
+				ExternalID: "external",
+			},
+		},
+		"duplicated-taints-with-same-key-effect": {
+			ObjectMeta: api.ObjectMeta{
+				Name: "dedicated-node1",
+				// Add two taints to the node with the same key and effect; should be rejected.
+				Annotations: map[string]string{
+					api.TaintsAnnotationKey: `
+					[{
+						"key": "dedicated",
+						"value": "special-user-1",
+						"effect": "NoSchedule"
+					}, {
+						"key": "dedicated",
+						"value": "special-user-2",
+						"effect": "NoSchedule"
+					}]`,
 				},
 			},
 			Spec: api.NodeSpec{

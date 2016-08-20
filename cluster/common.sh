@@ -550,6 +550,7 @@ ENABLE_CLUSTER_LOGGING: $(yaml-quote ${ENABLE_CLUSTER_LOGGING:-false})
 ENABLE_CLUSTER_UI: $(yaml-quote ${ENABLE_CLUSTER_UI:-false})
 ENABLE_NODE_PROBLEM_DETECTOR: $(yaml-quote ${ENABLE_NODE_PROBLEM_DETECTOR:-false})
 ENABLE_NODE_LOGGING: $(yaml-quote ${ENABLE_NODE_LOGGING:-false})
+ENABLE_RESCHEDULER: $(yaml-quote ${ENABLE_RESCHEDULER:-false})
 LOGGING_DESTINATION: $(yaml-quote ${LOGGING_DESTINATION:-})
 ELASTICSEARCH_LOGGING_REPLICAS: $(yaml-quote ${ELASTICSEARCH_LOGGING_REPLICAS:-})
 ENABLE_CLUSTER_DNS: $(yaml-quote ${ENABLE_CLUSTER_DNS:-false})
@@ -681,6 +682,11 @@ EOF
     if [ -n "${INITIAL_ETCD_CLUSTER:-}" ]; then
       cat >>$file <<EOF
 INITIAL_ETCD_CLUSTER: $(yaml-quote ${INITIAL_ETCD_CLUSTER})
+EOF
+    fi
+    if [ -n "${FEATURE_GATES:-}" ]; then
+      cat >>$file <<EOF
+FEATURE_GATES: $(yaml-quote ${FEATURE_GATES})
 EOF
     fi
   else

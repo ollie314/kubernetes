@@ -604,6 +604,8 @@ func describeVolumes(volumes []api.Volume, out io.Writer, space string) {
 			printPersistentVolumeClaimVolumeSource(volume.VolumeSource.PersistentVolumeClaim, out)
 		case volume.VolumeSource.RBD != nil:
 			printRBDVolumeSource(volume.VolumeSource.RBD, out)
+		case volume.VolumeSource.Quobyte != nil:
+			printQuobyteVolumeSource(volume.VolumeSource.Quobyte, out)
 		case volume.VolumeSource.DownwardAPI != nil:
 			printDownwardAPIVolumeSource(volume.VolumeSource.DownwardAPI, out)
 		default:
@@ -663,6 +665,14 @@ func printNFSVolumeSource(nfs *api.NFSVolumeSource, out io.Writer) {
 		"    Path:\t%v\n"+
 		"    ReadOnly:\t%v\n",
 		nfs.Server, nfs.Path, nfs.ReadOnly)
+}
+
+func printQuobyteVolumeSource(quobyte *api.QuobyteVolumeSource, out io.Writer) {
+	fmt.Fprintf(out, "    Type:\tQuobyte (a Quobyte mount on the host that shares a pod's lifetime)\n"+
+		"    Registry:\t%v\n"+
+		"    Volume:\t%v\n"+
+		"    ReadOnly:\t%v\n",
+		quobyte.Registry, quobyte.Volume, quobyte.ReadOnly)
 }
 
 func printISCSIVolumeSource(iscsi *api.ISCSIVolumeSource, out io.Writer) {
@@ -765,6 +775,8 @@ func (d *PersistentVolumeDescriber) Describe(namespace, name string, describerSe
 			printGlusterfsVolumeSource(pv.Spec.Glusterfs, out)
 		case pv.Spec.RBD != nil:
 			printRBDVolumeSource(pv.Spec.RBD, out)
+		case pv.Spec.Quobyte != nil:
+			printQuobyteVolumeSource(pv.Spec.Quobyte, out)
 		}
 
 		if events != nil {
@@ -2534,15 +2546,19 @@ func printTaintsMultilineWithIndent(out io.Writer, initialIndent, title, innerIn
 	}
 	sort.Strings(keys)
 
+	effects := []api.TaintEffect{api.TaintEffectNoSchedule, api.TaintEffectPreferNoSchedule}
+
 	for i, key := range keys {
-		for _, taint := range taints {
-			if taint.Key == key {
-				if i != 0 {
-					fmt.Fprint(out, initialIndent)
-					fmt.Fprint(out, innerIndent)
+		for _, effect := range effects {
+			for _, taint := range taints {
+				if taint.Key == key && taint.Effect == effect {
+					if i != 0 {
+						fmt.Fprint(out, initialIndent)
+						fmt.Fprint(out, innerIndent)
+					}
+					fmt.Fprintf(out, "%s=%s:%s\n", taint.Key, taint.Value, taint.Effect)
+					i++
 				}
-				fmt.Fprintf(out, "%s=%s:%s\n", taint.Key, taint.Value, taint.Effect)
-				i++
 			}
 		}
 	}

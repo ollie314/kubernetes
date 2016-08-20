@@ -58,7 +58,7 @@ type KubeletServer struct {
 // NewKubeletServer will create a new KubeletServer with default values.
 func NewKubeletServer() *KubeletServer {
 	config := componentconfig.KubeletConfiguration{}
-	api.Scheme.Convert(&v1alpha1.KubeletConfiguration{}, &config)
+	api.Scheme.Convert(&v1alpha1.KubeletConfiguration{}, &config, nil)
 	return &KubeletServer{
 		AuthPath:             util.NewStringFlag("/var/lib/kubelet/kubernetes_auth"), // deprecated
 		KubeConfig:           util.NewStringFlag("/var/lib/kubelet/kubeconfig"),
@@ -141,6 +141,7 @@ func (s *KubeletServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.VolumePluginDir, "volume-plugin-dir", s.VolumePluginDir, "<Warning: Alpha feature> The full path of the directory in which to search for additional third party volume plugins")
 	fs.StringVar(&s.CloudProvider, "cloud-provider", s.CloudProvider, "The provider for cloud services. By default, kubelet will attempt to auto-detect the cloud provider. Specify empty string for running with no cloud provider. [default=auto-detect]")
 	fs.StringVar(&s.CloudConfigFile, "cloud-config", s.CloudConfigFile, "The path to the cloud provider configuration file.  Empty string for no configuration file.")
+	utilconfig.DefaultFeatureGate.AddFlag(fs)
 
 	fs.StringVar(&s.KubeletCgroups, "resource-container", s.KubeletCgroups, "Optional absolute name of the resource-only container to create and run the Kubelet in.")
 	fs.MarkDeprecated("resource-container", "Use --kubelet-cgroups instead. Will be removed in a future version.")
@@ -150,7 +151,7 @@ func (s *KubeletServer) AddFlags(fs *pflag.FlagSet) {
 	fs.MarkDeprecated("system-container", "Use --system-cgroups instead. Will be removed in a future version.")
 	fs.StringVar(&s.SystemCgroups, "system-cgroups", s.SystemCgroups, "Optional absolute name of cgroups in which to place all non-kernel processes that are not already inside a cgroup under `/`. Empty for no container. Rolling back the flag requires a reboot. (Default: \"\").")
 
-	fs.BoolVar(&s.CgroupsPerQOS, "cgroups-per-qos", s.CgroupsPerQOS, "Enable creation of QoS cgroup hierarchy, if true top level QoS and pod cgroups are created.")
+	//fs.BoolVar(&s.CgroupsPerQOS, "cgroups-per-qos", s.CgroupsPerQOS, "Enable creation of QoS cgroup hierarchy, if true top level QoS and pod cgroups are created.")
 	fs.StringVar(&s.CgroupRoot, "cgroup-root", s.CgroupRoot, "Optional root cgroup to use for pods. This is handled by the container runtime on a best effort basis. Default: '', which means use the container runtime default.")
 	fs.StringVar(&s.ContainerRuntime, "container-runtime", s.ContainerRuntime, "The container runtime to use. Possible values: 'docker', 'rkt'. Default: 'docker'.")
 	fs.DurationVar(&s.RuntimeRequestTimeout.Duration, "runtime-request-timeout", s.RuntimeRequestTimeout.Duration, "Timeout of all runtime requests except long running request - pull, logs, exec and attach. When timeout exceeded, kubelet will cancel the request, throw out an error and retry later. Default: 2m0s")
@@ -172,6 +173,9 @@ func (s *KubeletServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.ResolverConfig, "resolv-conf", s.ResolverConfig, "Resolver configuration file used as the basis for the container DNS resolution configuration.")
 	fs.BoolVar(&s.CPUCFSQuota, "cpu-cfs-quota", s.CPUCFSQuota, "Enable CPU CFS quota enforcement for containers that specify CPU limits")
 	fs.BoolVar(&s.EnableControllerAttachDetach, "enable-controller-attach-detach", s.EnableControllerAttachDetach, "Enables the Attach/Detach controller to manage attachment/detachment of volumes scheduled to this node, and disables kubelet from executing any attach/detach operations")
+	fs.BoolVar(&s.MakeIPTablesUtilChains, "make-iptables-util-chains", s.MakeIPTablesUtilChains, "If true, kubelet will ensure iptables utility rules are present on host.")
+	fs.Int32Var(&s.IPTablesMasqueradeBit, "iptables-masquerade-bit", s.IPTablesMasqueradeBit, "The bit of the fwmark space to mark packets for SNAT. Must be within the range [0, 31]. Please match this parameter with corresponding parameter in kube-proxy.")
+	fs.Int32Var(&s.IPTablesDropBit, "iptables-drop-bit", s.IPTablesDropBit, "The bit of the fwmark space to mark packets for dropping. Must be within the range [0, 31].")
 
 	// Flags intended for testing, not recommended used in production environments.
 	fs.BoolVar(&s.ReallyCrashForTesting, "really-crash-for-testing", s.ReallyCrashForTesting, "If true, when panics occur crash. Intended for testing.")

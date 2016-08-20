@@ -36,13 +36,15 @@ import (
 type GetOptions struct {
 	Filenames []string
 	Recursive bool
+
+	Raw string
 }
 
 var (
 	get_long = dedent.Dedent(`
 		Display one or many resources.
 
-		`) + kubectl.PossibleResourceTypes + dedent.Dedent(`
+		`) + valid_resources + dedent.Dedent(`
 
 		This command will hide resources that have completed. For instance, pods that are in the Succeeded or Failed phases.
 		You can see the full results for any resource by providing the '--show-all' flag.
@@ -116,12 +118,40 @@ func NewCmdGet(f *cmdutil.Factory, out io.Writer, errOut io.Writer) *cobra.Comma
 	kubectl.AddJsonFilenameFlag(cmd, &options.Filenames, usage)
 	cmdutil.AddRecursiveFlag(cmd, &options.Recursive)
 	cmdutil.AddInclude3rdPartyFlags(cmd)
+	cmd.Flags().StringVar(&options.Raw, "raw", options.Raw, "Raw URI to request from the server.  Uses the transport specified by the kubeconfig file.")
 	return cmd
 }
 
 // RunGet implements the generic Get command
 // TODO: convert all direct flag accessors to a struct and pass that instead of cmd
 func RunGet(f *cmdutil.Factory, out io.Writer, errOut io.Writer, cmd *cobra.Command, args []string, options *GetOptions) error {
+	if len(options.Raw) > 0 {
+		client, err := f.Client()
+		if err != nil {
+			return err
+		}
+
+		stream, err := client.RESTClient.Get().RequestURI(options.Raw).Stream()
+		if err != nil {
+			return err
+		}
+		defer stream.Close()
+
+		for {
+			buffer := make([]byte, 1024, 1024)
+			bytesRead, err := stream.Read(buffer)
+			if bytesRead > 0 {
+				fmt.Printf("%s", string(buffer[:bytesRead]))
+			}
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	selector := cmdutil.GetFlagString(cmd, "selector")
 	allNamespaces := cmdutil.GetFlagBool(cmd, "all-namespaces")
 	showKind := cmdutil.GetFlagBool(cmd, "show-kind")
@@ -305,7 +335,7 @@ func RunGet(f *cmdutil.Factory, out io.Writer, errOut io.Writer, cmd *cobra.Comm
 		return err
 	}
 	var sorter *kubectl.RuntimeSort
-	if err == nil && len(sorting) > 0 && len(objs) > 1 {
+	if len(sorting) > 0 && len(objs) > 1 {
 		clientConfig, err := f.ClientConfig()
 		if err != nil {
 			return err

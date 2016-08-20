@@ -51,8 +51,7 @@ var (
 		will first check for an exact match on TYPE and NAME_PREFIX. If no such resource
 		exists, it will output details for every resource that has a name prefixed with NAME_PREFIX.
 
-		`) +
-		kubectl.PossibleResourceTypes
+		`) + valid_resources
 
 	describe_example = dedent.Dedent(`
 		# Describe a node
@@ -142,6 +141,7 @@ func RunDescribe(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []s
 		allErrs = append(allErrs, err)
 	}
 
+	first := true
 	for _, info := range infos {
 		mapping := info.ResourceMapping()
 		describer, err := f.Describer(mapping)
@@ -154,7 +154,12 @@ func RunDescribe(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []s
 			allErrs = append(allErrs, err)
 			continue
 		}
-		fmt.Fprintf(out, "%s\n\n", s)
+		if first {
+			first = false
+			fmt.Fprint(out, s)
+		} else {
+			fmt.Fprintf(out, "\n\n%s", s)
+		}
 	}
 
 	return utilerrors.NewAggregate(allErrs)

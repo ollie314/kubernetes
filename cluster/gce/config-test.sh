@@ -148,6 +148,9 @@ if [[ "${ENABLE_CLUSTER_AUTOSCALER}" == "true" ]]; then
   AUTOSCALER_ENABLE_SCALE_DOWN="${KUBE_AUTOSCALER_ENABLE_SCALE_DOWN:-false}"
 fi
 
+# Optional: Enable Rescheduler
+ENABLE_RESCHEDULER="${KUBE_ENABLE_RESCHEDULER:-false}"
+
 # If we included ResourceQuota, we should keep it at the end of the list to prevent incremeting quota usage prematurely.
 ADMISSION_CONTROL="${KUBE_ADMISSION_CONTROL:-NamespaceLifecycle,LimitRanger,ServiceAccount,PersistentVolumeLabel,ResourceQuota}"
 
@@ -183,4 +186,4 @@ E2E_STORAGE_TEST_ENVIRONMENT=${KUBE_E2E_STORAGE_TEST_ENVIRONMENT:-false}
 PREPULL_E2E_IMAGES="${PREPULL_E2E_IMAGES:-true}"
 
 # Evict pods whenever compute resource availability on the nodes gets below a threshold.
-EVICTION_HARD="${EVICTION_HARD:-memory.available<100Mi,nodefs.available<256Mi}"
+EVICTION_HARD="${EVICTION_HARD:-memory.available<100Mi,nodefs.available<10%}"

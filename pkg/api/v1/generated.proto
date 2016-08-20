@@ -256,6 +256,13 @@ message ConfigMapVolumeSource {
   // the volume setup will error. Paths must be relative and may not contain
   // the '..' path or start with '..'.
   repeated KeyToPath items = 2;
+
+  // Optional: mode bits to use on created files by default. Must be a
+  // value between 0 and 0777. Defaults to 0644.
+  // Directories within the path are not affected by this setting.
+  // This might be in conflict with other options that affect the file
+  // mode, like fsGroup, and the result can be other mode bits set.
+  optional int32 defaultMode = 3;
 }
 
 // A single application container that you want to run within a pod.
@@ -526,6 +533,12 @@ message DownwardAPIVolumeFile {
   // Selects a resource of the container: only resources limits and requests
   // (limits.cpu, limits.memory, requests.cpu and requests.memory) are currently supported.
   optional ResourceFieldSelector resourceFieldRef = 3;
+
+  // Optional: mode bits to use on this file, must be a value between 0
+  // and 0777. If not specified, the volume defaultMode will be used.
+  // This might be in conflict with other options that affect the file
+  // mode, like fsGroup, and the result can be other mode bits set.
+  optional int32 mode = 4;
 }
 
 // DownwardAPIVolumeSource represents a volume containing downward API info.
@@ -533,6 +546,13 @@ message DownwardAPIVolumeFile {
 message DownwardAPIVolumeSource {
   // Items is a list of downward API volume file
   repeated DownwardAPIVolumeFile items = 1;
+
+  // Optional: mode bits to use on created files by default. Must be a
+  // value between 0 and 0777. Defaults to 0644.
+  // Directories within the path are not affected by this setting.
+  // This might be in conflict with other options that affect the file
+  // mode, like fsGroup, and the result can be other mode bits set.
+  optional int32 defaultMode = 2;
 }
 
 // Represents an empty directory for a pod.
@@ -963,6 +983,12 @@ message KeyToPath {
   // May not contain the path element '..'.
   // May not start with the string '..'.
   optional string path = 2;
+
+  // Optional: mode bits to use on this file, must be a value between 0
+  // and 0777. If not specified, the volume defaultMode will be used.
+  // This might be in conflict with other options that affect the file
+  // mode, like fsGroup, and the result can be other mode bits set.
+  optional int32 mode = 3;
 }
 
 // Lifecycle describes actions that the management system should take in response to container lifecycle
@@ -1722,6 +1748,9 @@ message PersistentVolumeSource {
 
   // VsphereVolume represents a vSphere volume attached and mounted on kubelets host machine
   optional VsphereVirtualDiskVolumeSource vsphereVolume = 14;
+
+  // Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
+  optional QuobyteVolumeSource quobyte = 15;
 }
 
 // PersistentVolumeSpec is the specification of a persistent volume.
@@ -2291,6 +2320,30 @@ message Probe {
   optional int32 failureThreshold = 6;
 }
 
+// Represents a Quobyte mount that lasts the lifetime of a pod.
+// Quobyte volumes do not support ownership management or SELinux relabeling.
+message QuobyteVolumeSource {
+  // Registry represents a single or multiple Quobyte Registry services
+  // specified as a string as host:port pair (multiple entries are separated with commas)
+  // which acts as the central registry for volumes
+  optional string registry = 1;
+
+  // Volume is a string that references an already created Quobyte volume by name.
+  optional string volume = 2;
+
+  // ReadOnly here will force the Quobyte volume to be mounted with read-only permissions.
+  // Defaults to false.
+  optional bool readOnly = 3;
+
+  // User to map volume access to
+  // Defaults to serivceaccount user
+  optional string user = 4;
+
+  // Group to map volume access to
+  // Default is no group
+  optional string group = 5;
+}
+
 // Represents a Rados Block Device mount that lasts the lifetime of a pod.
 // RBD volumes support ownership management and SELinux relabeling.
 message RBDVolumeSource {
@@ -2564,6 +2617,13 @@ message SecretVolumeSource {
   // the volume setup will error. Paths must be relative and may not contain
   // the '..' path or start with '..'.
   repeated KeyToPath items = 2;
+
+  // Optional: mode bits to use on created files by default. Must be a
+  // value between 0 and 0777. Defaults to 0644.
+  // Directories within the path are not affected by this setting.
+  // This might be in conflict with other options that affect the file
+  // mode, like fsGroup, and the result can be other mode bits set.
+  optional int32 defaultMode = 3;
 }
 
 // SecurityContext holds security configuration that will be applied to a container.
@@ -2719,24 +2779,39 @@ message ServiceSpec {
   // More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#virtual-ips-and-service-proxies
   repeated ServicePort ports = 1;
 
-  // This service will route traffic to pods having labels matching this selector.
-  // Label keys and values that must match in order to receive traffic for this service.
-  // If not specified, endpoints must be manually specified and the system will not automatically manage them.
+  // Route service traffic to pods with label keys and values matching this
+  // selector. If empty or not present, the service is assumed to have an
+  // external process managing its endpoints, which Kubernetes will not
+  // modify. Only applies to types ClusterIP, NodePort, and LoadBalancer.
+  // Ignored if type is ExternalName.
   // More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#overview
   map<string, string> selector = 2;
 
-  // ClusterIP is usually assigned by the master and is the IP address of the service.
-  // If specified, it will be allocated to the service if it is unused
-  // or else creation of the service will fail.
-  // Valid values are None, empty string (""), or a valid IP address.
-  // 'None' can be specified for a headless service when proxying is not required.
-  // Cannot be updated.
+  // clusterIP is the IP address of the service and is usually assigned
+  // randomly by the master. If an address is specified manually and is not in
+  // use by others, it will be allocated to the service; otherwise, creation
+  // of the service will fail. This field can not be changed through updates.
+  // Valid values are "None", empty string (""), or a valid IP address. "None"
+  // can be specified for headless services when proxying is not required.
+  // Only applies to types ClusterIP, NodePort, and LoadBalancer. Ignored if
+  // type is ExternalName.
   // More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#virtual-ips-and-service-proxies
   optional string clusterIP = 3;
 
-  // Type of exposed service. Must be ClusterIP, NodePort, or LoadBalancer.
-  // Defaults to ClusterIP.
-  // More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#external-services
+  // type determines how the Service is exposed. Defaults to ClusterIP. Valid
+  // options are ExternalName, ClusterIP, NodePort, and LoadBalancer.
+  // "ExternalName" maps to the specified externalName.
+  // "ClusterIP" allocates a cluster-internal IP address for load-balancing to
+  // endpoints. Endpoints are determined by the selector or if that is not
+  // specified, by manual construction of an Endpoints object. If clusterIP is
+  // "None", no virtual IP is allocated and the endpoints are published as a
+  // set of endpoints rather than a stable IP.
+  // "NodePort" builds on ClusterIP and allocates a port on every node which
+  // routes to the clusterIP.
+  // "LoadBalancer" builds on NodePort and creates an
+  // external load-balancer (if supported in the current cloud) which routes
+  // to the clusterIP.
+  // More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#overview
   optional string type = 4;
 
   // externalIPs is a list of IP addresses for which nodes in the cluster
@@ -2775,6 +2850,11 @@ message ServiceSpec {
   // cloud-provider does not support the feature."
   // More info: http://releases.k8s.io/HEAD/docs/user-guide/services-firewalls.md
   repeated string loadBalancerSourceRanges = 9;
+
+  // externalName is the external reference that kubedns or equivalent will
+  // return as a CNAME record for this service. No proxying will be involved.
+  // Must be a valid DNS name and requires Type to be ExternalName.
+  optional string externalName = 10;
 }
 
 // ServiceStatus represents the current status of a service.
@@ -2944,6 +3024,9 @@ message VolumeSource {
 
   // VsphereVolume represents a vSphere volume attached and mounted on kubelets host machine
   optional VsphereVirtualDiskVolumeSource vsphereVolume = 20;
+
+  // Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
+  optional QuobyteVolumeSource quobyte = 21;
 }
 
 // Represents a vSphere volume resource.

@@ -157,6 +157,7 @@ func RegisterDeepCopies(scheme *runtime.Scheme) error {
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_api_PreferAvoidPodsEntry, InType: reflect.TypeOf(&PreferAvoidPodsEntry{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_api_PreferredSchedulingTerm, InType: reflect.TypeOf(&PreferredSchedulingTerm{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_api_Probe, InType: reflect.TypeOf(&Probe{})},
+		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_api_QuobyteVolumeSource, InType: reflect.TypeOf(&QuobyteVolumeSource{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_api_RBDVolumeSource, InType: reflect.TypeOf(&RBDVolumeSource{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_api_RangeAllocation, InType: reflect.TypeOf(&RangeAllocation{})},
 		conversion.GeneratedDeepCopyFunc{Fn: DeepCopy_api_ReplicationController, InType: reflect.TypeOf(&ReplicationController{})},
@@ -473,10 +474,19 @@ func DeepCopy_api_ConfigMapVolumeSource(in interface{}, out interface{}, c *conv
 			in, out := &in.Items, &out.Items
 			*out = make([]KeyToPath, len(*in))
 			for i := range *in {
-				(*out)[i] = (*in)[i]
+				if err := DeepCopy_api_KeyToPath(&(*in)[i], &(*out)[i], c); err != nil {
+					return err
+				}
 			}
 		} else {
 			out.Items = nil
+		}
+		if in.DefaultMode != nil {
+			in, out := &in.DefaultMode, &out.DefaultMode
+			*out = new(int32)
+			**out = **in
+		} else {
+			out.DefaultMode = nil
 		}
 		return nil
 	}
@@ -781,6 +791,13 @@ func DeepCopy_api_DownwardAPIVolumeFile(in interface{}, out interface{}, c *conv
 		} else {
 			out.ResourceFieldRef = nil
 		}
+		if in.Mode != nil {
+			in, out := &in.Mode, &out.Mode
+			*out = new(int32)
+			**out = **in
+		} else {
+			out.Mode = nil
+		}
 		return nil
 	}
 }
@@ -799,6 +816,13 @@ func DeepCopy_api_DownwardAPIVolumeSource(in interface{}, out interface{}, c *co
 			}
 		} else {
 			out.Items = nil
+		}
+		if in.DefaultMode != nil {
+			in, out := &in.DefaultMode, &out.DefaultMode
+			*out = new(int32)
+			**out = **in
+		} else {
+			out.DefaultMode = nil
 		}
 		return nil
 	}
@@ -1252,6 +1276,13 @@ func DeepCopy_api_KeyToPath(in interface{}, out interface{}, c *conversion.Clone
 		out := out.(*KeyToPath)
 		out.Key = in.Key
 		out.Path = in.Path
+		if in.Mode != nil {
+			in, out := &in.Mode, &out.Mode
+			*out = new(int32)
+			**out = **in
+		} else {
+			out.Mode = nil
+		}
 		return nil
 	}
 }
@@ -2145,6 +2176,13 @@ func DeepCopy_api_PersistentVolumeSource(in interface{}, out interface{}, c *con
 		} else {
 			out.RBD = nil
 		}
+		if in.Quobyte != nil {
+			in, out := &in.Quobyte, &out.Quobyte
+			*out = new(QuobyteVolumeSource)
+			**out = **in
+		} else {
+			out.Quobyte = nil
+		}
 		if in.ISCSI != nil {
 			in, out := &in.ISCSI, &out.ISCSI
 			*out = new(ISCSIVolumeSource)
@@ -2809,6 +2847,19 @@ func DeepCopy_api_Probe(in interface{}, out interface{}, c *conversion.Cloner) e
 	}
 }
 
+func DeepCopy_api_QuobyteVolumeSource(in interface{}, out interface{}, c *conversion.Cloner) error {
+	{
+		in := in.(*QuobyteVolumeSource)
+		out := out.(*QuobyteVolumeSource)
+		out.Registry = in.Registry
+		out.Volume = in.Volume
+		out.ReadOnly = in.ReadOnly
+		out.User = in.User
+		out.Group = in.Group
+		return nil
+	}
+}
+
 func DeepCopy_api_RBDVolumeSource(in interface{}, out interface{}, c *conversion.Cloner) error {
 	{
 		in := in.(*RBDVolumeSource)
@@ -3138,10 +3189,19 @@ func DeepCopy_api_SecretVolumeSource(in interface{}, out interface{}, c *convers
 			in, out := &in.Items, &out.Items
 			*out = make([]KeyToPath, len(*in))
 			for i := range *in {
-				(*out)[i] = (*in)[i]
+				if err := DeepCopy_api_KeyToPath(&(*in)[i], &(*out)[i], c); err != nil {
+					return err
+				}
 			}
 		} else {
 			out.Items = nil
+		}
+		if in.DefaultMode != nil {
+			in, out := &in.DefaultMode, &out.DefaultMode
+			*out = new(int32)
+			**out = **in
+		} else {
+			out.DefaultMode = nil
 		}
 		return nil
 	}
@@ -3346,6 +3406,7 @@ func DeepCopy_api_ServiceSpec(in interface{}, out interface{}, c *conversion.Clo
 			out.Selector = nil
 		}
 		out.ClusterIP = in.ClusterIP
+		out.ExternalName = in.ExternalName
 		if in.ExternalIPs != nil {
 			in, out := &in.ExternalIPs, &out.ExternalIPs
 			*out = make([]string, len(*in))
@@ -3517,6 +3578,13 @@ func DeepCopy_api_VolumeSource(in interface{}, out interface{}, c *conversion.Cl
 			}
 		} else {
 			out.RBD = nil
+		}
+		if in.Quobyte != nil {
+			in, out := &in.Quobyte, &out.Quobyte
+			*out = new(QuobyteVolumeSource)
+			**out = **in
+		} else {
+			out.Quobyte = nil
 		}
 		if in.FlexVolume != nil {
 			in, out := &in.FlexVolume, &out.FlexVolume

@@ -429,6 +429,7 @@ prepare_etcd_manifest() {
   sed -i -e "s@{{ *cpulimit *}}@\"$4\"@g" "${etcd_temp_file}"
   sed -i -e "s@{{ *hostname *}}@$host_name@g" "${etcd_temp_file}"
   sed -i -e "s@{{ *etcd_cluster *}}@$etcd_cluster@g" "${etcd_temp_file}"
+  sed -i -e "s@{{ *storage_backend *}}@${STORAGE_BACKEND:-}@g" "${temp_file}"
   sed -i -e "s@{{ *cluster_state *}}@$cluster_state@g" "${etcd_temp_file}"
   # Replace the volume host path
   sed -i -e "s@/mnt/master-pd/var/etcd@/mnt/disks/master-pd/var/etcd@g" "${etcd_temp_file}"
@@ -698,6 +699,15 @@ start_cluster_autoscaler() {
     sed -i -e "s@{{cloud_config_mount}}@${CLOUD_CONFIG_MOUNT}@g" "${src_file}"
     sed -i -e "s@{{cloud_config_volume}}@${CLOUD_CONFIG_VOLUME}@g" "${src_file}"
     cp "${src_file}" /etc/kubernetes/manifests
+  fi
+}
+
+# Starts rescheduler.
+start-rescheduler() {
+  if [[ "${ENABLE_RESCHEDULER:-}" == "true" ]]; then
+    prepare-log-file /var/log/rescheduler.log
+    cp "${KUBE_HOME}/kube-manifests/kubernetes/gci-trusty/rescheduler.manifest" \
+       /etc/kubernetes/manifests/
   fi
 }
 

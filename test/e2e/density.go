@@ -70,6 +70,7 @@ func density30AddonResourceVerifier(numNodes int) map[string]framework.ResourceC
 	controllerMem = math.MaxUint64
 	schedulerCPU := math.MaxFloat32
 	schedulerMem = math.MaxUint64
+	framework.Logf("Setting resource constraings for provider: %s", framework.TestContext.Provider)
 	if framework.ProviderIs("kubemark") {
 		if numNodes <= 5 {
 			apiserverCPU = 0.15
@@ -134,8 +135,8 @@ func density30AddonResourceVerifier(numNodes int) map[string]framework.ResourceC
 		MemoryConstraint: 20 * (1024 * 1024),
 	}
 	constraints["l7-lb-controller"] = framework.ResourceConstraint{
-		CPUConstraint:    0.05,
-		MemoryConstraint: 20 * (1024 * 1024),
+		CPUConstraint:    0.1,
+		MemoryConstraint: 60 * (1024 * 1024),
 	}
 	constraints["influxdb"] = framework.ResourceConstraint{
 		CPUConstraint:    2,
@@ -447,7 +448,6 @@ var _ = framework.KubeDescribe("Density", func() {
 		switch testArg.podsPerNode {
 		case 30:
 			name = "[Feature:Performance] " + name
-			f.AddonResourceConstraints = func() map[string]framework.ResourceConstraint { return density30AddonResourceVerifier(nodeCount) }()
 		case 95:
 			name = "[Feature:HighDensityPerformance]" + name
 		default:
@@ -456,6 +456,9 @@ var _ = framework.KubeDescribe("Density", func() {
 		itArg := testArg
 		It(name, func() {
 			podsPerNode := itArg.podsPerNode
+			if podsPerNode == 30 {
+				f.AddonResourceConstraints = func() map[string]framework.ResourceConstraint { return density30AddonResourceVerifier(nodeCount) }()
+			}
 			totalPods = podsPerNode * nodeCount
 			fileHndl, err := os.Create(fmt.Sprintf(framework.TestContext.OutputDir+"/%s/pod_states.csv", uuid))
 			framework.ExpectNoError(err)

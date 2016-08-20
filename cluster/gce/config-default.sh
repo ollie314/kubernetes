@@ -102,6 +102,9 @@ fi
 # Optional: customize runtime config
 RUNTIME_CONFIG="${KUBE_RUNTIME_CONFIG:-}"
 
+# Optional: set feature gates
+FEATURE_GATES="${KUBE_FEATURE_GATES:-}"
+
 # Optional: Install cluster DNS.
 ENABLE_CLUSTER_DNS="${KUBE_ENABLE_CLUSTER_DNS:-true}"
 DNS_SERVER_IP="${KUBE_DNS_SERVER_IP:-10.0.0.10}"
@@ -128,6 +131,9 @@ if [[ "${ENABLE_CLUSTER_AUTOSCALER}" == "true" ]]; then
   AUTOSCALER_ENABLE_SCALE_DOWN="${KUBE_AUTOSCALER_ENABLE_SCALE_DOWN:-true}"
 fi
 
+# Optional: Enable Rescheduler
+ENABLE_RESCHEDULER="${KUBE_ENABLE_RESCHEDULER:-false}"
+
 # Admission Controllers to invoke prior to persisting objects in cluster
 # If we included ResourceQuota, we should keep it at the end of the list to prevent incremeting quota usage prematurely.
 ADMISSION_CONTROL=NamespaceLifecycle,LimitRanger,ServiceAccount,PersistentVolumeLabel,ResourceQuota
@@ -153,4 +159,4 @@ HAIRPIN_MODE="${HAIRPIN_MODE:-promiscuous-bridge}" # promiscuous-bridge, hairpin
 E2E_STORAGE_TEST_ENVIRONMENT=${KUBE_E2E_STORAGE_TEST_ENVIRONMENT:-false}
 
 # Evict pods whenever compute resource availability on the nodes gets below a threshold.
-EVICTION_HARD="${EVICTION_HARD:-memory.available<100Mi}"
+EVICTION_HARD="${EVICTION_HARD:-memory.available<100Mi,nodefs.available<10%}"

@@ -259,13 +259,10 @@ type VolumeSource struct {
 	// Cinder represents a cinder volume attached and mounted on kubelets host machine
 	// More info: http://releases.k8s.io/HEAD/examples/mysql-cinder-pd/README.md
 	Cinder *CinderVolumeSource `json:"cinder,omitempty" protobuf:"bytes,13,opt,name=cinder"`
-
 	// CephFS represents a Ceph FS mount on the host that shares a pod's lifetime
 	CephFS *CephFSVolumeSource `json:"cephfs,omitempty" protobuf:"bytes,14,opt,name=cephfs"`
-
 	// Flocker represents a Flocker volume attached to a kubelet's host machine. This depends on the Flocker control service being running
 	Flocker *FlockerVolumeSource `json:"flocker,omitempty" protobuf:"bytes,15,opt,name=flocker"`
-
 	// DownwardAPI represents downward API about the pod that should populate this volume
 	DownwardAPI *DownwardAPIVolumeSource `json:"downwardAPI,omitempty" protobuf:"bytes,16,opt,name=downwardAPI"`
 	// FC represents a Fibre Channel resource that is attached to a kubelet's host machine and then exposed to the pod.
@@ -276,6 +273,8 @@ type VolumeSource struct {
 	ConfigMap *ConfigMapVolumeSource `json:"configMap,omitempty" protobuf:"bytes,19,opt,name=configMap"`
 	// VsphereVolume represents a vSphere volume attached and mounted on kubelets host machine
 	VsphereVolume *VsphereVirtualDiskVolumeSource `json:"vsphereVolume,omitempty" protobuf:"bytes,20,opt,name=vsphereVolume"`
+	// Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
+	Quobyte *QuobyteVolumeSource `json:"quobyte,omitempty" protobuf:"bytes,21,opt,name=quobyte"`
 }
 
 // PersistentVolumeClaimVolumeSource references the user's PVC in the same namespace.
@@ -338,6 +337,8 @@ type PersistentVolumeSource struct {
 	AzureFile *AzureFileVolumeSource `json:"azureFile,omitempty" protobuf:"bytes,13,opt,name=azureFile"`
 	// VsphereVolume represents a vSphere volume attached and mounted on kubelets host machine
 	VsphereVolume *VsphereVirtualDiskVolumeSource `json:"vsphereVolume,omitempty" protobuf:"bytes,14,opt,name=vsphereVolume"`
+	// Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
+	Quobyte *QuobyteVolumeSource `json:"quobyte,omitempty" protobuf:"bytes,15,opt,name=quobyte"`
 }
 
 // +genclient=true
@@ -688,6 +689,30 @@ type GCEPersistentDiskVolumeSource struct {
 	ReadOnly bool `json:"readOnly,omitempty" protobuf:"varint,4,opt,name=readOnly"`
 }
 
+// Represents a Quobyte mount that lasts the lifetime of a pod.
+// Quobyte volumes do not support ownership management or SELinux relabeling.
+type QuobyteVolumeSource struct {
+	// Registry represents a single or multiple Quobyte Registry services
+	// specified as a string as host:port pair (multiple entries are separated with commas)
+	// which acts as the central registry for volumes
+	Registry string `json:"registry" protobuf:"bytes,1,opt,name=registry"`
+
+	// Volume is a string that references an already created Quobyte volume by name.
+	Volume string `json:"volume" protobuf:"bytes,2,opt,name=volume"`
+
+	// ReadOnly here will force the Quobyte volume to be mounted with read-only permissions.
+	// Defaults to false.
+	ReadOnly bool `json:"readOnly,omitempty" protobuf:"varint,3,opt,name=readOnly"`
+
+	// User to map volume access to
+	// Defaults to serivceaccount user
+	User string `json:"user,omitempty" protobuf:"bytes,4,opt,name=user"`
+
+	// Group to map volume access to
+	// Default is no group
+	Group string `json:"group,omitempty" protobuf:"bytes,5,opt,name=group"`
+}
+
 // FlexVolume represents a generic volume resource that is
 // provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.
 type FlexVolumeSource struct {
@@ -769,7 +794,17 @@ type SecretVolumeSource struct {
 	// the volume setup will error. Paths must be relative and may not contain
 	// the '..' path or start with '..'.
 	Items []KeyToPath `json:"items,omitempty" protobuf:"bytes,2,rep,name=items"`
+	// Optional: mode bits to use on created files by default. Must be a
+	// value between 0 and 0777. Defaults to 0644.
+	// Directories within the path are not affected by this setting.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	DefaultMode *int32 `json:"defaultMode,omitempty" protobuf:"bytes,3,opt,name=defaultMode"`
 }
+
+const (
+	SecretVolumeSourceDefaultMode int32 = 0644
+)
 
 // Represents an NFS mount that lasts the lifetime of a pod.
 // NFS volumes do not support ownership management or SELinux relabeling.
@@ -868,7 +903,17 @@ type ConfigMapVolumeSource struct {
 	// the volume setup will error. Paths must be relative and may not contain
 	// the '..' path or start with '..'.
 	Items []KeyToPath `json:"items,omitempty" protobuf:"bytes,2,rep,name=items"`
+	// Optional: mode bits to use on created files by default. Must be a
+	// value between 0 and 0777. Defaults to 0644.
+	// Directories within the path are not affected by this setting.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	DefaultMode *int32 `json:"defaultMode,omitempty" protobuf:"varint,3,opt,name=defaultMode"`
 }
+
+const (
+	ConfigMapVolumeSourceDefaultMode int32 = 0644
+)
 
 // Maps a string key to a path within a volume.
 type KeyToPath struct {
@@ -880,6 +925,11 @@ type KeyToPath struct {
 	// May not contain the path element '..'.
 	// May not start with the string '..'.
 	Path string `json:"path" protobuf:"bytes,2,opt,name=path"`
+	// Optional: mode bits to use on this file, must be a value between 0
+	// and 0777. If not specified, the volume defaultMode will be used.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	Mode *int32 `json:"mode,omitempty" protobuf:"varint,3,opt,name=mode"`
 }
 
 // ContainerPort represents a network port in a single container.
@@ -2016,6 +2066,11 @@ const (
 	// external load balancer (if the cloud provider supports it), in addition
 	// to 'NodePort' type.
 	ServiceTypeLoadBalancer ServiceType = "LoadBalancer"
+
+	// ServiceTypeExternalName means a service consists of only a reference to
+	// an external name that kubedns or equivalent will return as a CNAME
+	// record, with no exposing or proxying of any pods involved.
+	ServiceTypeExternalName ServiceType = "ExternalName"
 )
 
 // ServiceStatus represents the current status of a service.
@@ -2050,24 +2105,39 @@ type ServiceSpec struct {
 	// More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#virtual-ips-and-service-proxies
 	Ports []ServicePort `json:"ports" patchStrategy:"merge" patchMergeKey:"port" protobuf:"bytes,1,rep,name=ports"`
 
-	// This service will route traffic to pods having labels matching this selector.
-	// Label keys and values that must match in order to receive traffic for this service.
-	// If not specified, endpoints must be manually specified and the system will not automatically manage them.
+	// Route service traffic to pods with label keys and values matching this
+	// selector. If empty or not present, the service is assumed to have an
+	// external process managing its endpoints, which Kubernetes will not
+	// modify. Only applies to types ClusterIP, NodePort, and LoadBalancer.
+	// Ignored if type is ExternalName.
 	// More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#overview
 	Selector map[string]string `json:"selector,omitempty" protobuf:"bytes,2,rep,name=selector"`
 
-	// ClusterIP is usually assigned by the master and is the IP address of the service.
-	// If specified, it will be allocated to the service if it is unused
-	// or else creation of the service will fail.
-	// Valid values are None, empty string (""), or a valid IP address.
-	// 'None' can be specified for a headless service when proxying is not required.
-	// Cannot be updated.
+	// clusterIP is the IP address of the service and is usually assigned
+	// randomly by the master. If an address is specified manually and is not in
+	// use by others, it will be allocated to the service; otherwise, creation
+	// of the service will fail. This field can not be changed through updates.
+	// Valid values are "None", empty string (""), or a valid IP address. "None"
+	// can be specified for headless services when proxying is not required.
+	// Only applies to types ClusterIP, NodePort, and LoadBalancer. Ignored if
+	// type is ExternalName.
 	// More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#virtual-ips-and-service-proxies
 	ClusterIP string `json:"clusterIP,omitempty" protobuf:"bytes,3,opt,name=clusterIP"`
 
-	// Type of exposed service. Must be ClusterIP, NodePort, or LoadBalancer.
-	// Defaults to ClusterIP.
-	// More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#external-services
+	// type determines how the Service is exposed. Defaults to ClusterIP. Valid
+	// options are ExternalName, ClusterIP, NodePort, and LoadBalancer.
+	// "ExternalName" maps to the specified externalName.
+	// "ClusterIP" allocates a cluster-internal IP address for load-balancing to
+	// endpoints. Endpoints are determined by the selector or if that is not
+	// specified, by manual construction of an Endpoints object. If clusterIP is
+	// "None", no virtual IP is allocated and the endpoints are published as a
+	// set of endpoints rather than a stable IP.
+	// "NodePort" builds on ClusterIP and allocates a port on every node which
+	// routes to the clusterIP.
+	// "LoadBalancer" builds on NodePort and creates an
+	// external load-balancer (if supported in the current cloud) which routes
+	// to the clusterIP.
+	// More info: http://releases.k8s.io/HEAD/docs/user-guide/services.md#overview
 	Type ServiceType `json:"type,omitempty" protobuf:"bytes,4,opt,name=type,casttype=ServiceType"`
 
 	// externalIPs is a list of IP addresses for which nodes in the cluster
@@ -2106,6 +2176,11 @@ type ServiceSpec struct {
 	// cloud-provider does not support the feature."
 	// More info: http://releases.k8s.io/HEAD/docs/user-guide/services-firewalls.md
 	LoadBalancerSourceRanges []string `json:"loadBalancerSourceRanges,omitempty" protobuf:"bytes,9,opt,name=loadBalancerSourceRanges"`
+
+	// externalName is the external reference that kubedns or equivalent will
+	// return as a CNAME record for this service. No proxying will be involved.
+	// Must be a valid DNS name and requires Type to be ExternalName.
+	ExternalName string `json:"externalName,omitempty" protobuf:"bytes,10,opt,name=externalName"`
 }
 
 // ServicePort contains information on service's port.
@@ -3286,7 +3361,17 @@ type ComponentStatusList struct {
 type DownwardAPIVolumeSource struct {
 	// Items is a list of downward API volume file
 	Items []DownwardAPIVolumeFile `json:"items,omitempty" protobuf:"bytes,1,rep,name=items"`
+	// Optional: mode bits to use on created files by default. Must be a
+	// value between 0 and 0777. Defaults to 0644.
+	// Directories within the path are not affected by this setting.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	DefaultMode *int32 `json:"defaultMode,omitempty" protobuf:"varint,2,opt,name=defaultMode"`
 }
+
+const (
+	DownwardAPIVolumeSourceDefaultMode int32 = 0644
+)
 
 // DownwardAPIVolumeFile represents information to create the file containing the pod field
 type DownwardAPIVolumeFile struct {
@@ -3297,6 +3382,11 @@ type DownwardAPIVolumeFile struct {
 	// Selects a resource of the container: only resources limits and requests
 	// (limits.cpu, limits.memory, requests.cpu and requests.memory) are currently supported.
 	ResourceFieldRef *ResourceFieldSelector `json:"resourceFieldRef,omitempty" protobuf:"bytes,3,opt,name=resourceFieldRef"`
+	// Optional: mode bits to use on this file, must be a value between 0
+	// and 0777. If not specified, the volume defaultMode will be used.
+	// This might be in conflict with other options that affect the file
+	// mode, like fsGroup, and the result can be other mode bits set.
+	Mode *int32 `json:"mode,omitempty" protobuf:"varint,4,opt,name=mode"`
 }
 
 // SecurityContext holds security configuration that will be applied to a container.

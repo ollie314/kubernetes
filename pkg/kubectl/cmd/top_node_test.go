@@ -23,31 +23,41 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/heapster/metrics/apis/metrics/v1alpha1"
+	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/unversioned/fake"
 	"net/url"
 )
 
+const (
+	apiPrefix  = "api"
+	apiVersion = "v1"
+)
+
 func TestTopNodeAllMetrics(t *testing.T) {
 	initTestErrorHandler(t)
-	metrics := testNodeMetricsData()
-	expectedPath := fmt.Sprintf("%s/%s/nodes", baseMetricsAddress, metricsApiVersion)
+	metrics, nodes := testNodeMetricsData()
+	expectedMetricsPath := fmt.Sprintf("%s/%s/nodes", baseMetricsAddress, metricsApiVersion)
+	expectedNodePath := fmt.Sprintf("/%s/%s/nodes", apiPrefix, apiVersion)
 
-	f, tf, _, ns := NewAPIFactory()
+	f, tf, codec, ns := NewAPIFactory()
 	tf.Printer = &testPrinter{}
 	tf.Client = &fake.RESTClient{
 		NegotiatedSerializer: ns,
 		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			switch p, m := req.URL.Path, req.Method; {
-			case p == expectedPath && m == "GET":
+			case p == expectedMetricsPath && m == "GET":
 				body, err := marshallBody(metrics)
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
 				}
 				return &http.Response{StatusCode: 200, Header: defaultHeader(), Body: body}, nil
+			case p == expectedNodePath && m == "GET":
+				return &http.Response{StatusCode: 200, Header: defaultHeader(), Body: objBody(codec, nodes)}, nil
 			default:
-				t.Fatalf("unexpected request: %#v\nGot URL: %#v\nExpected path: %#v", req, req.URL, expectedPath)
+				t.Fatalf("unexpected request: %#v\nGot URL: %#v\nExpected path: %#v", req, req.URL, expectedMetricsPath)
 				return nil, nil
 			}
 		}),
@@ -61,7 +71,7 @@ func TestTopNodeAllMetrics(t *testing.T) {
 
 	// Check the presence of node names in the output.
 	result := buf.String()
-	for _, m := range metrics {
+	for _, m := range metrics.Items {
 		if !strings.Contains(result, m.Name) {
 			t.Errorf("missing metrics for %s: \n%s", m.Name, result)
 		}
@@ -70,12 +80,17 @@ func TestTopNodeAllMetrics(t *testing.T) {
 
 func TestTopNodeWithNameMetrics(t *testing.T) {
 	initTestErrorHandler(t)
-	metrics := testNodeMetricsData()
-	expectedMetrics := metrics[0]
-	nonExpectedMetrics := metrics[1:]
+	metrics, nodes := testNodeMetricsData()
+	expectedMetrics := metrics.Items[0]
+	expectedNode := nodes.Items[0]
+	nonExpectedMetrics := v1alpha1.NodeMetricsList{
+		ListMeta: metrics.ListMeta,
+		Items:    metrics.Items[1:],
+	}
 	expectedPath := fmt.Sprintf("%s/%s/nodes/%s", baseMetricsAddress, metricsApiVersion, expectedMetrics.Name)
+	expectedNodePath := fmt.Sprintf("/%s/%s/nodes/%s", apiPrefix, apiVersion, expectedMetrics.Name)
 
-	f, tf, _, ns := NewAPIFactory()
+	f, tf, codec, ns := NewAPIFactory()
 	tf.Printer = &testPrinter{}
 	tf.Client = &fake.RESTClient{
 		NegotiatedSerializer: ns,
@@ -87,6 +102,8 @@ func TestTopNodeWithNameMetrics(t *testing.T) {
 					t.Errorf("unexpected error: %v", err)
 				}
 				return &http.Response{StatusCode: 200, Header: defaultHeader(), Body: body}, nil
+			case p == expectedNodePath && m == "GET":
+				return &http.Response{StatusCode: 200, Header: defaultHeader(), Body: objBody(codec, &expectedNode)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\nGot URL: %#v\nExpected path: %#v", req, req.URL, expectedPath)
 				return nil, nil
@@ -105,7 +122,7 @@ func TestTopNodeWithNameMetrics(t *testing.T) {
 	if !strings.Contains(result, expectedMetrics.Name) {
 		t.Errorf("missing metrics for %s: \n%s", expectedMetrics.Name, result)
 	}
-	for _, m := range nonExpectedMetrics {
+	for _, m := range nonExpectedMetrics.Items {
 		if strings.Contains(result, m.Name) {
 			t.Errorf("unexpected metrics for %s: \n%s", m.Name, result)
 		}
@@ -114,14 +131,25 @@ func TestTopNodeWithNameMetrics(t *testing.T) {
 
 func TestTopNodeWithLabelSelectorMetrics(t *testing.T) {
 	initTestErrorHandler(t)
-	metrics := testNodeMetricsData()
-	expectedMetrics := metrics[0:1]
-	nonExpectedMetrics := metrics[1:]
+	metrics, nodes := testNodeMetricsData()
+	expectedMetrics := v1alpha1.NodeMetricsList{
+		ListMeta: metrics.ListMeta,
+		Items:    metrics.Items[0:1],
+	}
+	expectedNodes := api.NodeList{
+		ListMeta: nodes.ListMeta,
+		Items:    nodes.Items[0:1],
+	}
+	nonExpectedMetrics := v1alpha1.NodeMetricsList{
+		ListMeta: metrics.ListMeta,
+		Items:    metrics.Items[1:],
+	}
 	label := "key=value"
 	expectedPath := fmt.Sprintf("%s/%s/nodes", baseMetricsAddress, metricsApiVersion)
 	expectedQuery := fmt.Sprintf("labelSelector=%s", url.QueryEscape(label))
+	expectedNodePath := fmt.Sprintf("/%s/%s/nodes", apiPrefix, apiVersion)
 
-	f, tf, _, ns := NewAPIFactory()
+	f, tf, codec, ns := NewAPIFactory()
 	tf.Printer = &testPrinter{}
 	tf.Client = &fake.RESTClient{
 		NegotiatedSerializer: ns,
@@ -133,6 +161,8 @@ func TestTopNodeWithLabelSelectorMetrics(t *testing.T) {
 					t.Errorf("unexpected error: %v", err)
 				}
 				return &http.Response{StatusCode: 200, Header: defaultHeader(), Body: body}, nil
+			case p == expectedNodePath && m == "GET":
+				return &http.Response{StatusCode: 200, Header: defaultHeader(), Body: objBody(codec, &expectedNodes)}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\nGot URL: %#v\nExpected path: %#v", req, req.URL, expectedPath)
 				return nil, nil
@@ -149,12 +179,12 @@ func TestTopNodeWithLabelSelectorMetrics(t *testing.T) {
 
 	// Check the presence of node names in the output.
 	result := buf.String()
-	for _, m := range expectedMetrics {
+	for _, m := range expectedMetrics.Items {
 		if !strings.Contains(result, m.Name) {
 			t.Errorf("missing metrics for %s: \n%s", m.Name, result)
 		}
 	}
-	for _, m := range nonExpectedMetrics {
+	for _, m := range nonExpectedMetrics.Items {
 		if strings.Contains(result, m.Name) {
 			t.Errorf("unexpected metrics for %s: \n%s", m.Name, result)
 		}
