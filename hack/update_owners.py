@@ -33,8 +33,9 @@ SKIP_MAINTAINERS = {
     'a-robinson', 'aronchick', 'bgrant0607-nocc', 'david-mcmahon',
     'goltermann', 'sarahnovotny'}
 
-def get_test_history():
-    url = time.strftime(GCS_URL_BASE + 'logs/%Y-%m-%d.json')
+def get_test_history(days_ago):
+    url = time.strftime(GCS_URL_BASE + 'logs/%Y-%m-%d.json',
+                        time.gmtime(time.time() - days_ago * 24 * 60 * 60))
     resp = urllib2.urlopen(url)
     content = resp.read()
     if resp.headers.get('content-encoding') == 'gzip':
@@ -90,16 +91,19 @@ def get_maintainers():
            "ncdc", "nikhiljindal", "piosz", "pmorie", "pwittrock", "Q-Lee",
            "quinton-hoole", "Random-Liu", "rmmh", "roberthbailey", "ronnielai",
            "saad-ali", "sarahnovotny", "smarterclayton", "soltysh", "spxtr",
-           "sttts", "swagiaal", "thockin", "timothysc", "timstclair", "tmrts",
+           "sttts", "thockin", "timothysc", "timstclair", "tmrts",
            "vishh", "vulpecula", "wojtek-t", "xiang90", "yifan-gu", "yujuhong",
            "zmerlynn"}
     return sorted(ret - SKIP_MAINTAINERS)
 
 
 def main():
-    test_history = get_test_history()
-    test_names = sorted(set(map(normalize, test_history['test_names'])))
-    test_names.append('DEFAULT')
+    test_names = set()
+    for days_ago in range(4):
+        test_history = get_test_history(days_ago)
+        test_names.update(normalize(name) for name in test_history['test_names'])
+    test_names.add('DEFAULT')
+    test_names = sorted(test_names)
     owners = load_owners(OWNERS_PATH)
 
     outdated_tests = sorted(set(owners) - set(test_names))

@@ -19,9 +19,11 @@ package podsecuritypolicy
 import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/security/podsecuritypolicy/apparmor"
 	"k8s.io/kubernetes/pkg/security/podsecuritypolicy/capabilities"
 	"k8s.io/kubernetes/pkg/security/podsecuritypolicy/group"
 	"k8s.io/kubernetes/pkg/security/podsecuritypolicy/selinux"
+	"k8s.io/kubernetes/pkg/security/podsecuritypolicy/sysctl"
 	"k8s.io/kubernetes/pkg/security/podsecuritypolicy/user"
 	"k8s.io/kubernetes/pkg/util/validation/field"
 )
@@ -58,7 +60,9 @@ type StrategyFactory interface {
 type ProviderStrategies struct {
 	RunAsUserStrategy         user.RunAsUserStrategy
 	SELinuxStrategy           selinux.SELinuxStrategy
+	AppArmorStrategy          apparmor.Strategy
 	FSGroupStrategy           group.GroupStrategy
 	SupplementalGroupStrategy group.GroupStrategy
 	CapabilitiesStrategy      capabilities.Strategy
+	SysctlsStrategy           sysctl.SysctlsStrategy
 }

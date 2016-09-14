@@ -3,7 +3,109 @@
   "apiVersion": "authorization.k8s.io/v1beta1",
   "basePath": "https://10.10.10.10:6443",
   "resourcePath": "/apis/authorization.k8s.io/v1beta1",
+  "info": {
+   "title": "",
+   "description": ""
+  },
   "apis": [
+   {
+    "path": "/apis/authorization.k8s.io/v1beta1/namespaces/{namespace}/localsubjectaccessreviews",
+    "description": "API at /apis/authorization.k8s.io/v1beta1",
+    "operations": [
+     {
+      "type": "v1beta1.LocalSubjectAccessReview",
+      "method": "POST",
+      "summary": "create a LocalSubjectAccessReview",
+      "nickname": "createNamespacedLocalSubjectAccessReview",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "v1beta1.LocalSubjectAccessReview",
+        "paramType": "body",
+        "name": "body",
+        "description": "",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "namespace",
+        "description": "object name and auth scope, such as for teams and projects",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1beta1.LocalSubjectAccessReview"
+       }
+      ],
+      "produces": [
+       "application/json",
+       "application/yaml",
+       "application/vnd.kubernetes.protobuf"
+      ],
+      "consumes": [
+       "*/*"
+      ]
+     }
+    ]
+   },
+   {
+    "path": "/apis/authorization.k8s.io/v1beta1/selfsubjectaccessreviews",
+    "description": "API at /apis/authorization.k8s.io/v1beta1",
+    "operations": [
+     {
+      "type": "v1beta1.SelfSubjectAccessReview",
+      "method": "POST",
+      "summary": "create a SelfSubjectAccessReview",
+      "nickname": "createSelfSubjectAccessReview",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "v1beta1.SelfSubjectAccessReview",
+        "paramType": "body",
+        "name": "body",
+        "description": "",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1beta1.SelfSubjectAccessReview"
+       }
+      ],
+      "produces": [
+       "application/json",
+       "application/yaml",
+       "application/vnd.kubernetes.protobuf"
+      ],
+      "consumes": [
+       "*/*"
+      ]
+     }
+    ]
+   },
    {
     "path": "/apis/authorization.k8s.io/v1beta1/subjectaccessreviews",
     "description": "API at /apis/authorization.k8s.io/v1beta1",
@@ -74,9 +176,9 @@
    }
   ],
   "models": {
-   "v1beta1.SubjectAccessReview": {
-    "id": "v1beta1.SubjectAccessReview",
-    "description": "SubjectAccessReview checks whether or not a user or group can perform an action.",
+   "v1beta1.LocalSubjectAccessReview": {
+    "id": "v1beta1.LocalSubjectAccessReview",
+    "description": "LocalSubjectAccessReview checks whether or not a user or group can perform an action in a given namespace. Having a namespace scoped resource makes it much easier to grant namespace scoped policy that includes permissions checking.",
     "required": [
      "spec"
     ],
@@ -94,7 +196,7 @@
      },
      "spec": {
       "$ref": "v1beta1.SubjectAccessReviewSpec",
-      "description": "Spec holds information about the request being evaluated"
+      "description": "Spec holds information about the request being evaluated.  spec.namespace must be equal to the namespace you made the request against.  If empty, it is defaulted."
      },
      "status": {
       "$ref": "v1beta1.SubjectAccessReviewStatus",
@@ -171,6 +273,10 @@
        "type": "string"
       },
       "description": "Must be empty before the object is deleted from the registry. Each entry is an identifier for the responsible component that will remove the entry from the list. If the deletionTimestamp of the object is non-nil, entries in this list can only be removed."
+     },
+     "clusterName": {
+      "type": "string",
+      "description": "The name of the cluster which the object belongs to. This is used to distinguish resources with same name and namespace in different clusters. This field is not set anywhere right now and apiserver is going to ignore it if set in create or update request."
      }
     }
    },
@@ -301,6 +407,76 @@
      "evaluationError": {
       "type": "string",
       "description": "EvaluationError is an indication that some error occurred during the authorization check. It is entirely possible to get an error and be able to continue determine authorization status in spite of it. For instance, RBAC can be missing a role, but enough roles are still present and bound to reason about the request."
+     }
+    }
+   },
+   "v1beta1.SelfSubjectAccessReview": {
+    "id": "v1beta1.SelfSubjectAccessReview",
+    "description": "SelfSubjectAccessReview checks whether or the current user can perform an action.  Not filling in a spec.namespace means \"in all namespaces\".  Self is a special case, because users should always be able to check whether they can perform an action",
+    "required": [
+     "spec"
+    ],
+    "properties": {
+     "kind": {
+      "type": "string",
+      "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#types-kinds"
+     },
+     "apiVersion": {
+      "type": "string",
+      "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#resources"
+     },
+     "metadata": {
+      "$ref": "v1.ObjectMeta"
+     },
+     "spec": {
+      "$ref": "v1beta1.SelfSubjectAccessReviewSpec",
+      "description": "Spec holds information about the request being evaluated.  user and groups must be empty"
+     },
+     "status": {
+      "$ref": "v1beta1.SubjectAccessReviewStatus",
+      "description": "Status is filled in by the server and indicates whether the request is allowed or not"
+     }
+    }
+   },
+   "v1beta1.SelfSubjectAccessReviewSpec": {
+    "id": "v1beta1.SelfSubjectAccessReviewSpec",
+    "description": "SelfSubjectAccessReviewSpec is a description of the access request.  Exactly one of ResourceAuthorizationAttributes and NonResourceAuthorizationAttributes must be set",
+    "properties": {
+     "resourceAttributes": {
+      "$ref": "v1beta1.ResourceAttributes",
+      "description": "ResourceAuthorizationAttributes describes information for a resource access request"
+     },
+     "nonResourceAttributes": {
+      "$ref": "v1beta1.NonResourceAttributes",
+      "description": "NonResourceAttributes describes information for a non-resource access request"
+     }
+    }
+   },
+   "v1beta1.SubjectAccessReview": {
+    "id": "v1beta1.SubjectAccessReview",
+    "description": "SubjectAccessReview checks whether or not a user or group can perform an action.",
+    "required": [
+     "spec"
+    ],
+    "properties": {
+     "kind": {
+      "type": "string",
+      "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#types-kinds"
+     },
+     "apiVersion": {
+      "type": "string",
+      "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#resources"
+     },
+     "metadata": {
+      "$ref": "v1.ObjectMeta"
+     },
+     "spec": {
+      "$ref": "v1beta1.SubjectAccessReviewSpec",
+      "description": "Spec holds information about the request being evaluated"
+     },
+     "status": {
+      "$ref": "v1beta1.SubjectAccessReviewStatus",
+      "description": "Status is filled in by the server and indicates whether the request is allowed or not"
      }
     }
    },

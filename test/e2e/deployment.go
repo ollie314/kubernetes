@@ -18,6 +18,7 @@ package e2e
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -85,6 +86,9 @@ var _ = framework.KubeDescribe("Deployment", func() {
 	})
 	It("scaled rollout deployment should not block on annotation check", func() {
 		testScaledRolloutDeployment(f)
+	})
+	It("overlapping deployment should not fight with each other", func() {
+		testOverlappingDeployment(f)
 	})
 	// TODO: add tests that cover deployment.Spec.MinReadySeconds once we solved clock-skew issues
 })
@@ -178,12 +182,20 @@ func checkDeploymentRevision(c *clientset.Clientset, ns, deploymentName, revisio
 	return deployment, newRS
 }
 
+func stopDeploymentOverlap(c *clientset.Clientset, oldC client.Interface, ns, deploymentName, overlapWith string) {
+	stopDeploymentMaybeOverlap(c, oldC, ns, deploymentName, overlapWith)
+}
+
 func stopDeployment(c *clientset.Clientset, oldC client.Interface, ns, deploymentName string) {
+	stopDeploymentMaybeOverlap(c, oldC, ns, deploymentName, "")
+}
+
+func stopDeploymentMaybeOverlap(c *clientset.Clientset, oldC client.Interface, ns, deploymentName, overlapWith string) {
 	deployment, err := c.Extensions().Deployments(ns).Get(deploymentName)
 	Expect(err).NotTo(HaveOccurred())
 
 	framework.Logf("Deleting deployment %s", deploymentName)
-	reaper, err := kubectl.ReaperFor(extensions.Kind("Deployment"), oldC)
+	reaper, err := kubectl.ReaperFor(extensions.Kind("Deployment"), c)
 	Expect(err).NotTo(HaveOccurred())
 	timeout := 1 * time.Minute
 	err = reaper.Stop(ns, deployment.Name, timeout, api.NewDeleteOptions(0))
@@ -199,16 +211,38 @@ func stopDeployment(c *clientset.Clientset, oldC client.Interface, ns, deploymen
 	options := api.ListOptions{LabelSelector: selector}
 	rss, err := c.Extensions().ReplicaSets(ns).List(options)
 	Expect(err).NotTo(HaveOccurred())
-	Expect(rss.Items).Should(HaveLen(0))
+	// RSes may be created by overlapping deployments right after this deployment is deleted, ignore them
+	if len(overlapWith) == 0 {
+		Expect(rss.Items).Should(HaveLen(0))
+	} else {
+		noOverlapRSes := []extensions.ReplicaSet{}
+		for _, rs := range rss.Items {
+			if !strings.HasPrefix(rs.Name, overlapWith) {
+				noOverlapRSes = append(noOverlapRSes, rs)
+			}
+		}
+		Expect(noOverlapRSes).Should(HaveLen(0))
+	}
 	framework.Logf("Ensuring deployment %s's Pods were deleted", deploymentName)
 	var pods *api.PodList
 	if err := wait.PollImmediate(time.Second, timeout, func() (bool, error) {
-		pods, err = c.Core().Pods(ns).List(api.ListOptions{})
+		pods, err = c.Core().Pods(ns).List(options)
 		if err != nil {
 			return false, err
 		}
-		if len(pods.Items) == 0 {
+		// Pods may be created by overlapping deployments right after this deployment is deleted, ignore them
+		if len(overlapWith) == 0 && len(pods.Items) == 0 {
 			return true, nil
+		} else if len(overlapWith) != 0 {
+			noOverlapPods := []api.Pod{}
+			for _, pod := range pods.Items {
+				if !strings.HasPrefix(pod.Name, overlapWith) {
+					noOverlapPods = append(noOverlapPods, pod)
+				}
+			}
+			if len(noOverlapPods) == 0 {
+				return true, nil
+			}
 		}
 		return false, nil
 	}); err != nil {
@@ -1080,10 +1114,10 @@ func testScaledRolloutDeployment(f *framework.Framework) {
 	first, err = c.Extensions().ReplicaSets(first.Namespace).Get(first.Name)
 	Expect(err).NotTo(HaveOccurred())
 
-	firstCond := client.ReplicaSetHasDesiredReplicas(f.Client.Extensions(), first)
+	firstCond := client.ReplicaSetHasDesiredReplicas(c.Extensions(), first)
 	wait.PollImmediate(10*time.Millisecond, 1*time.Minute, firstCond)
 
-	secondCond := client.ReplicaSetHasDesiredReplicas(f.Client.Extensions(), second)
+	secondCond := client.ReplicaSetHasDesiredReplicas(c.Extensions(), second)
 	wait.PollImmediate(10*time.Millisecond, 1*time.Minute, secondCond)
 
 	By(fmt.Sprintf("Updating the size (up) and template at the same time for deployment %q", deploymentName))
@@ -1141,10 +1175,10 @@ func testScaledRolloutDeployment(f *framework.Framework) {
 	newRs, err := deploymentutil.GetNewReplicaSet(deployment, c)
 	Expect(err).NotTo(HaveOccurred())
 
-	oldCond := client.ReplicaSetHasDesiredReplicas(f.Client.Extensions(), oldRs)
+	oldCond := client.ReplicaSetHasDesiredReplicas(c.Extensions(), oldRs)
 	wait.PollImmediate(10*time.Millisecond, 1*time.Minute, oldCond)
 
-	newCond := client.ReplicaSetHasDesiredReplicas(f.Client.Extensions(), newRs)
+	newCond := client.ReplicaSetHasDesiredReplicas(c.Extensions(), newRs)
 	wait.PollImmediate(10*time.Millisecond, 1*time.Minute, newCond)
 
 	By(fmt.Sprintf("Updating the size (down) and template at the same time for deployment %q", deploymentName))
@@ -1176,4 +1210,112 @@ func testScaledRolloutDeployment(f *framework.Framework) {
 	Expect(err).NotTo(HaveOccurred())
 	err = framework.WaitForDeploymentStatus(c, deployment)
 	Expect(err).NotTo(HaveOccurred())
+}
+
+func testOverlappingDeployment(f *framework.Framework) {
+	ns := f.Namespace.Name
+	// TODO: remove unversionedClient when the refactoring is done. Currently some
+	// functions like verifyPod still expects a unversioned#Client.
+	c := adapter.FromUnversionedClient(f.Client)
+
+	deploymentName := "first-deployment"
+	podLabels := map[string]string{"name": redisImageName}
+	replicas := int32(1)
+	By(fmt.Sprintf("Creating deployment %q", deploymentName))
+	d := newDeployment(deploymentName, replicas, podLabels, redisImageName, redisImage, extensions.RollingUpdateDeploymentStrategyType, nil)
+	deploy, err := c.Extensions().Deployments(ns).Create(d)
+	Expect(err).NotTo(HaveOccurred(), "Failed creating the first deployment")
+
+	// Wait for it to be updated to revision 1
+	err = framework.WaitForDeploymentRevisionAndImage(c, ns, deploy.Name, "1", redisImage)
+	Expect(err).NotTo(HaveOccurred(), "The first deployment failed to update to revision 1")
+
+	Expect(err).NotTo(HaveOccurred())
+	deploymentName = "second-deployment"
+	By(fmt.Sprintf("Creating deployment %q with overlapping selector", deploymentName))
+	d = newDeployment(deploymentName, replicas, podLabels, nginxImageName, nginxImage, extensions.RollingUpdateDeploymentStrategyType, nil)
+	deployOverlapping, err := c.Extensions().Deployments(ns).Create(d)
+	Expect(err).NotTo(HaveOccurred(), "Failed creating the second deployment")
+	defer stopDeployment(c, f.Client, ns, deployOverlapping.Name)
+
+	// Wait for overlapping annotation updated to both deployments
+	By("Waiting for both deployments to have overlapping annotations")
+	err = framework.WaitForOverlappingAnnotationMatch(c, ns, deploy.Name, deployOverlapping.Name)
+	Expect(err).NotTo(HaveOccurred(), "Failed to update the first deployment's overlapping annotation")
+	err = framework.WaitForOverlappingAnnotationMatch(c, ns, deployOverlapping.Name, deploy.Name)
+	Expect(err).NotTo(HaveOccurred(), "Failed to update the second deployment's overlapping annotation")
+
+	// Only the first deployment is synced
+	By("Checking only the first overlapping deployment is synced")
+	options := api.ListOptions{}
+	rsList, err := c.Extensions().ReplicaSets(ns).List(options)
+	Expect(err).NotTo(HaveOccurred(), "Failed listing all replica sets in namespace %s", ns)
+	Expect(rsList.Items).To(HaveLen(int(replicas)))
+	Expect(rsList.Items[0].Spec.Template.Spec.Containers).To(HaveLen(1))
+	Expect(rsList.Items[0].Spec.Template.Spec.Containers[0].Image).To(Equal(deploy.Spec.Template.Spec.Containers[0].Image))
+
+	By("Deleting the first deployment")
+	stopDeploymentOverlap(c, f.Client, ns, deploy.Name, deployOverlapping.Name)
+
+	// Wait for overlapping annotation cleared
+	By("Waiting for the second deployment to clear overlapping annotation")
+	err = framework.WaitForOverlappingAnnotationMatch(c, ns, deployOverlapping.Name, "")
+	Expect(err).NotTo(HaveOccurred(), "Failed to clear the second deployment's overlapping annotation")
+
+	// Wait for it to be updated to revision 1
+	err = framework.WaitForDeploymentRevisionAndImage(c, ns, deployOverlapping.Name, "1", nginxImage)
+	Expect(err).NotTo(HaveOccurred(), "The second deployment failed to update to revision 1")
+
+	// Now the second deployment is synced
+	By("Checking the second overlapping deployment is synced")
+	rsList, err = c.Extensions().ReplicaSets(ns).List(options)
+	Expect(err).NotTo(HaveOccurred(), "Failed listing all replica sets in namespace %s", ns)
+	Expect(rsList.Items).To(HaveLen(int(replicas)))
+	Expect(rsList.Items[0].Spec.Template.Spec.Containers).To(HaveLen(1))
+	Expect(rsList.Items[0].Spec.Template.Spec.Containers[0].Image).To(Equal(deployOverlapping.Spec.Template.Spec.Containers[0].Image))
+
+	deploymentName = "third-deployment"
+	podLabels = map[string]string{"name": nginxImageName}
+	By(fmt.Sprintf("Creating deployment %q", deploymentName))
+	d = newDeployment(deploymentName, replicas, podLabels, nginxImageName, nginxImage, extensions.RollingUpdateDeploymentStrategyType, nil)
+	deployLater, err := c.Extensions().Deployments(ns).Create(d)
+	Expect(err).NotTo(HaveOccurred(), "Failed creating the third deployment")
+	defer stopDeployment(c, f.Client, ns, deployLater.Name)
+
+	// Wait for it to be updated to revision 1
+	err = framework.WaitForDeploymentRevisionAndImage(c, ns, deployLater.Name, "1", nginxImage)
+	Expect(err).NotTo(HaveOccurred(), "The third deployment failed to update to revision 1")
+
+	// Update the second deployment's selector to make it overlap with the third deployment
+	By(fmt.Sprintf("Updating deployment %q selector to make it overlap with existing one", deployOverlapping.Name))
+	deployOverlapping, err = framework.UpdateDeploymentWithRetries(c, ns, deployOverlapping.Name, func(update *extensions.Deployment) {
+		update.Spec.Selector = deployLater.Spec.Selector
+		update.Spec.Template.Labels = deployLater.Spec.Template.Labels
+		update.Spec.Template.Spec.Containers[0].Image = redisImage
+	})
+	Expect(err).NotTo(HaveOccurred())
+
+	// Wait for overlapping annotation updated to both deployments
+	By("Waiting for both deployments to have overlapping annotations")
+	err = framework.WaitForOverlappingAnnotationMatch(c, ns, deployOverlapping.Name, deployLater.Name)
+	Expect(err).NotTo(HaveOccurred(), "Failed to update the second deployment's overlapping annotation")
+	err = framework.WaitForOverlappingAnnotationMatch(c, ns, deployLater.Name, deployOverlapping.Name)
+	Expect(err).NotTo(HaveOccurred(), "Failed to update the third deployment's overlapping annotation")
+
+	// The second deployment shouldn't be synced
+	By("Checking the second deployment is not synced")
+	Expect(deployOverlapping.Annotations[deploymentutil.RevisionAnnotation]).To(Equal("1"))
+
+	// Update the second deployment's selector to make it not overlap with the third deployment
+	By(fmt.Sprintf("Updating deployment %q selector to make it not overlap with existing one", deployOverlapping.Name))
+	deployOverlapping, err = framework.UpdateDeploymentWithRetries(c, ns, deployOverlapping.Name, func(update *extensions.Deployment) {
+		update.Spec.Selector = deploy.Spec.Selector
+		update.Spec.Template.Labels = deploy.Spec.Template.Labels
+	})
+	Expect(err).NotTo(HaveOccurred())
+
+	// Wait for the second deployment to be synced
+	By("Checking the second deployment is now synced")
+	err = framework.WaitForDeploymentRevisionAndImage(c, ns, deployOverlapping.Name, "2", redisImage)
+	Expect(err).NotTo(HaveOccurred(), "The second deployment failed to update to revision 2")
 }

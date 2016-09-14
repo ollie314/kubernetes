@@ -23,7 +23,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_3"
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_5"
 	"k8s.io/kubernetes/pkg/metrics"
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/test/e2e/framework"
@@ -118,7 +118,7 @@ func gatherMetrics(f *framework.Framework) {
 var _ = framework.KubeDescribe("Garbage collector", func() {
 	f := framework.NewDefaultFramework("gc")
 	It("[Feature:GarbageCollector] should delete pods created by rc when not orphaning", func() {
-		clientSet := f.Clientset_1_3
+		clientSet := f.Clientset_1_5
 		rcClient := clientSet.Core().ReplicationControllers(f.Namespace.Name)
 		podClient := clientSet.Core().Pods(f.Namespace.Name)
 		rcName := "simpletest.rc"
@@ -168,8 +168,70 @@ var _ = framework.KubeDescribe("Garbage collector", func() {
 		gatherMetrics(f)
 	})
 
-	It("[Feature:GarbageCollector] should orphan pods created by rc", func() {
-		clientSet := f.Clientset_1_3
+	It("[Feature:GarbageCollector] should orphan pods created by rc if delete options say so", func() {
+		clientSet := f.Clientset_1_5
+		rcClient := clientSet.Core().ReplicationControllers(f.Namespace.Name)
+		podClient := clientSet.Core().Pods(f.Namespace.Name)
+		rcName := "simpletest.rc"
+		rc := newOwnerRC(f, rcName)
+		replicas := int32(100)
+		rc.Spec.Replicas = &replicas
+		By("create the rc")
+		rc, err := rcClient.Create(rc)
+		if err != nil {
+			framework.Failf("Failed to create replication controller: %v", err)
+		}
+		// wait for rc to create pods
+		if err := wait.Poll(5*time.Second, 30*time.Second, func() (bool, error) {
+			rc, err := rcClient.Get(rc.Name)
+			if err != nil {
+				return false, fmt.Errorf("Failed to get rc: %v", err)
+			}
+			if rc.Status.Replicas == *rc.Spec.Replicas {
+				return true, nil
+			} else {
+				return false, nil
+			}
+		}); err != nil {
+			framework.Failf("failed to wait for the rc.Status.Replicas to reach rc.Spec.Replicas: %v", err)
+		}
+		By("delete the rc")
+		deleteOptions := getOrphanOptions()
+		deleteOptions.Preconditions = api.NewUIDPreconditions(string(rc.UID))
+		if err := rcClient.Delete(rc.ObjectMeta.Name, deleteOptions); err != nil {
+			framework.Failf("failed to delete the rc: %v", err)
+		}
+		By("wait for the rc to be deleted")
+		if err := wait.Poll(5*time.Second, 30*time.Second, func() (bool, error) {
+			rcs, err := rcClient.List(api.ListOptions{})
+			if err != nil {
+				return false, fmt.Errorf("Failed to list rcs: %v", err)
+			}
+			if len(rcs.Items) != 0 {
+				return false, nil
+			}
+			return true, nil
+		}); err != nil && err != wait.ErrWaitTimeout {
+			framework.Failf("%v", err)
+		}
+		By("wait for 30 seconds to see if the garbage collector mistakenly deletes the pods")
+		if err := wait.Poll(5*time.Second, 30*time.Second, func() (bool, error) {
+			pods, err := podClient.List(api.ListOptions{})
+			if err != nil {
+				return false, fmt.Errorf("Failed to list pods: %v", err)
+			}
+			if e, a := int(*(rc.Spec.Replicas)), len(pods.Items); e != a {
+				return false, fmt.Errorf("expect %d pods, got %d pods", e, a)
+			}
+			return false, nil
+		}); err != nil && err != wait.ErrWaitTimeout {
+			framework.Failf("%v", err)
+		}
+		gatherMetrics(f)
+	})
+
+	It("[Feature:GarbageCollector] should orphan pods created by rc if deleteOptions.OrphanDependents is nil", func() {
+		clientSet := f.Clientset_1_5
 		rcClient := clientSet.Core().ReplicationControllers(f.Namespace.Name)
 		podClient := clientSet.Core().Pods(f.Namespace.Name)
 		rcName := "simpletest.rc"
@@ -194,7 +256,7 @@ var _ = framework.KubeDescribe("Garbage collector", func() {
 			framework.Failf("failed to wait for the rc.Status.Replicas to reach rc.Spec.Replicas: %v", err)
 		}
 		By("delete the rc")
-		deleteOptions := getOrphanOptions()
+		deleteOptions := &api.DeleteOptions{}
 		deleteOptions.Preconditions = api.NewUIDPreconditions(string(rc.UID))
 		if err := rcClient.Delete(rc.ObjectMeta.Name, deleteOptions); err != nil {
 			framework.Failf("failed to delete the rc: %v", err)

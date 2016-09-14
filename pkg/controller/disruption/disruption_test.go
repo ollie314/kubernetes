@@ -27,6 +27,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/apis/policy"
 	"k8s.io/kubernetes/pkg/client/cache"
+	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/util/intstr"
 	"k8s.io/kubernetes/pkg/util/uuid"
@@ -76,13 +77,16 @@ func newFakeDisruptionController() (*DisruptionController, *pdbStates) {
 	ps := &pdbStates{}
 
 	dc := &DisruptionController{
-		pdbLister:  cache.StoreToPodDisruptionBudgetLister{Store: cache.NewStore(controller.KeyFunc)},
-		podLister:  cache.StoreToPodLister{Indexer: cache.NewIndexer(controller.KeyFunc, cache.Indexers{})},
-		rcLister:   cache.StoreToReplicationControllerLister{Indexer: cache.NewIndexer(controller.KeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})},
-		rsLister:   cache.StoreToReplicaSetLister{Store: cache.NewStore(controller.KeyFunc)},
-		dLister:    cache.StoreToDeploymentLister{Store: cache.NewStore(controller.KeyFunc)},
-		getUpdater: func() updater { return ps.Set },
+		pdbLister:   cache.StoreToPodDisruptionBudgetLister{Store: cache.NewStore(controller.KeyFunc)},
+		podLister:   cache.StoreToPodLister{Indexer: cache.NewIndexer(controller.KeyFunc, cache.Indexers{})},
+		rcLister:    cache.StoreToReplicationControllerLister{Indexer: cache.NewIndexer(controller.KeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})},
+		rsLister:    cache.StoreToReplicaSetLister{Store: cache.NewStore(controller.KeyFunc)},
+		dLister:     cache.StoreToDeploymentLister{Indexer: cache.NewIndexer(controller.KeyFunc, cache.Indexers{})},
+		getUpdater:  func() updater { return ps.Set },
+		broadcaster: record.NewBroadcaster(),
 	}
+
+	dc.recorder = dc.broadcaster.NewRecorder(api.EventSource{Component: "disruption_test"})
 
 	return dc, ps
 }
@@ -438,7 +442,7 @@ func TestTwoControllers(t *testing.T) {
 
 	d, _ := newDeployment(t, 11)
 	d.Spec.Selector = newSel(dLabels)
-	add(t, dc.dLister.Store, d)
+	add(t, dc.dLister.Indexer, d)
 	dc.sync(pdbName)
 	ps.VerifyPdbStatus(t, pdbName, true, 4, 4, 11)
 

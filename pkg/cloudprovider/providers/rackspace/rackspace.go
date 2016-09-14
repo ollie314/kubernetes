@@ -156,6 +156,7 @@ func readInstanceID() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("Cannot open %s: %v", metaDataPath, err)
 	}
+	defer file.Close()
 
 	return parseMetaData(file)
 }
@@ -475,7 +476,7 @@ func (os *Rackspace) GetZone() (cloudprovider.Zone, error) {
 }
 
 // Create a volume of given size (in GiB)
-func (rs *Rackspace) CreateVolume(name string, size int, tags *map[string]string) (volumeName string, err error) {
+func (rs *Rackspace) CreateVolume(name string, size int, vtype, availability string, tags *map[string]string) (volumeName string, err error) {
 	return "", errors.New("unimplemented")
 }
 
@@ -563,7 +564,7 @@ func (rs *Rackspace) getVolume(diskName string) (volumes.Volume, error) {
 		return false, errors.New(errmsg)
 	})
 	if err != nil {
-		glog.Errorf("Error occured getting volume: %s", diskName)
+		glog.Errorf("Error occurred getting volume: %s", diskName)
 	}
 	return volume, err
 }

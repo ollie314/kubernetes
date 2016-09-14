@@ -136,7 +136,7 @@ fi
 # TODO (bburns) Parameterize this for multiple cluster per project
 function get_vpc_id {
   $AWS_CMD describe-vpcs \
-           --filters Name=tag:Name,Values=kubernetes-vpc \
+           --filters Name=tag:Name,Values=${VPC_NAME} \
                      Name=tag:KubernetesCluster,Values=${CLUSTER_ID} \
            --query Vpcs[].VpcId
 }
@@ -819,7 +819,7 @@ function vpc-setup {
 	  VPC_ID=$($AWS_CMD create-vpc --cidr-block ${VPC_CIDR} --query Vpc.VpcId)
 	  $AWS_CMD modify-vpc-attribute --vpc-id $VPC_ID --enable-dns-support '{"Value": true}' > $LOG
 	  $AWS_CMD modify-vpc-attribute --vpc-id $VPC_ID --enable-dns-hostnames '{"Value": true}' > $LOG
-	  add-tag $VPC_ID Name kubernetes-vpc
+	  add-tag $VPC_ID Name ${VPC_NAME}
 	  add-tag $VPC_ID KubernetesCluster ${CLUSTER_ID}
   fi
 
@@ -931,14 +931,12 @@ function kube-up {
   authorize-security-group-ingress "${MASTER_SG_ID}" "--source-group ${NODE_SG_ID} --protocol all"
   authorize-security-group-ingress "${NODE_SG_ID}" "--source-group ${MASTER_SG_ID} --protocol all"
 
-  # TODO(justinsb): Would be fairly easy to replace 0.0.0.0/0 in these rules
-
   # SSH is open to the world
-  authorize-security-group-ingress "${MASTER_SG_ID}" "--protocol tcp --port 22 --cidr 0.0.0.0/0"
-  authorize-security-group-ingress "${NODE_SG_ID}" "--protocol tcp --port 22 --cidr 0.0.0.0/0"
+  authorize-security-group-ingress "${MASTER_SG_ID}" "--protocol tcp --port 22 --cidr ${SSH_CIDR}"
+  authorize-security-group-ingress "${NODE_SG_ID}" "--protocol tcp --port 22 --cidr ${SSH_CIDR}"
 
   # HTTPS to the master is allowed (for API access)
-  authorize-security-group-ingress "${MASTER_SG_ID}" "--protocol tcp --port 443 --cidr 0.0.0.0/0"
+  authorize-security-group-ingress "${MASTER_SG_ID}" "--protocol tcp --port 443 --cidr ${HTTP_API_CIDR}"
 
   # KUBE_USE_EXISTING_MASTER is used to add minions to an existing master
   if [[ "${KUBE_USE_EXISTING_MASTER:-}" == "true" ]]; then

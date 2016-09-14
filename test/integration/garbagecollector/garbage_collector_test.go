@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/glog"
 	dto "github.com/prometheus/client_model/go"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
@@ -144,6 +145,8 @@ func setup(t *testing.T) (*httptest.Server, *garbagecollector.GarbageCollector, 
 
 // This test simulates the cascading deletion.
 func TestCascadingDeletion(t *testing.T) {
+	glog.V(6).Infof("TestCascadingDeletion starts")
+	defer glog.V(6).Infof("TestCascadingDeletion ends")
 	s, gc, clientSet := setup(t)
 	defer s.Close()
 
@@ -209,7 +212,7 @@ func TestCascadingDeletion(t *testing.T) {
 	go gc.Run(5, stopCh)
 	defer close(stopCh)
 	// delete one of the replication controller
-	if err := rcClient.Delete(toBeDeletedRCName, nil); err != nil {
+	if err := rcClient.Delete(toBeDeletedRCName, getNonOrphanOptions()); err != nil {
 		t.Fatalf("failed to delete replication controller: %v", err)
 	}
 
@@ -251,6 +254,8 @@ func TestCascadingDeletion(t *testing.T) {
 // This test simulates the case where an object is created with an owner that
 // doesn't exist. It verifies the GC will delete such an object.
 func TestCreateWithNonExistentOwner(t *testing.T) {
+	glog.V(6).Infof("TestCreateWithNonExistentOwner starts")
+	defer glog.V(6).Infof("TestCreateWithNonExistentOwner ends")
 	s, gc, clientSet := setup(t)
 	defer s.Close()
 
@@ -374,7 +379,7 @@ func TestStressingCascadingDeletion(t *testing.T) {
 	wg.Add(collections * 4)
 	rcUIDs := make(chan types.UID, collections*4)
 	for i := 0; i < collections; i++ {
-		// rc is created with empty finalizers, deleted with nil delete options, pods will be deleted
+		// rc is created with empty finalizers, deleted with nil delete options, pods will remain.
 		go setupRCsPods(t, gc, clientSet, "collection1-"+strconv.Itoa(i), ns.Name, []string{}, nil, &wg, rcUIDs)
 		// rc is created with the orphan finalizer, deleted with nil options, pods will remain.
 		go setupRCsPods(t, gc, clientSet, "collection2-"+strconv.Itoa(i), ns.Name, []string{api.FinalizerOrphan}, nil, &wg, rcUIDs)
@@ -397,7 +402,7 @@ func TestStressingCascadingDeletion(t *testing.T) {
 	if err := wait.Poll(5*time.Second, 30*time.Second, func() (bool, error) {
 		podsInEachCollection := 3
 		// see the comments on the calls to setupRCsPods for details
-		remainingGroups := 2
+		remainingGroups := 3
 		return verifyRemainingObjects(t, clientSet, ns.Name, 0, collections*podsInEachCollection*remainingGroups)
 	}); err != nil {
 		t.Fatal(err)
@@ -411,7 +416,7 @@ func TestStressingCascadingDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, pod := range pods.Items {
-		if !strings.Contains(pod.ObjectMeta.Name, "collection2-") && !strings.Contains(pod.ObjectMeta.Name, "collection4-") {
+		if !strings.Contains(pod.ObjectMeta.Name, "collection1-") && !strings.Contains(pod.ObjectMeta.Name, "collection2-") && !strings.Contains(pod.ObjectMeta.Name, "collection4-") {
 			t.Errorf("got unexpected remaining pod: %#v", pod)
 		}
 	}

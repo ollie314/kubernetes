@@ -139,7 +139,7 @@ func newReplicaSetController(eventRecorder record.EventRecorder, podInformer fra
 		},
 		burstReplicas: burstReplicas,
 		expectations:  controller.NewUIDTrackingControllerExpectations(controller.NewControllerExpectations()),
-		queue:         workqueue.New(),
+		queue:         workqueue.NewNamed("replicaset"),
 		garbageCollectorEnabled: garbageCollectorEnabled,
 	}
 
@@ -658,15 +658,19 @@ func (rsc *ReplicaSetController) syncReplicaSet(key string) error {
 	// of the selector of the replicaset, so the possible matching pods must be
 	// part of the filteredPods.
 	fullyLabeledReplicasCount := 0
-	templateLabel := labels.Set(rs.Spec.Template.Labels).AsSelector()
+	readyReplicasCount := 0
+	templateLabel := labels.Set(rs.Spec.Template.Labels).AsSelectorPreValidated()
 	for _, pod := range filteredPods {
 		if templateLabel.Matches(labels.Set(pod.Labels)) {
 			fullyLabeledReplicasCount++
 		}
+		if api.IsPodReady(pod) {
+			readyReplicasCount++
+		}
 	}
 
 	// Always updates status as pods come up or die.
-	if err := updateReplicaCount(rsc.kubeClient.Extensions().ReplicaSets(rs.Namespace), rs, len(filteredPods), fullyLabeledReplicasCount); err != nil {
+	if err := updateReplicaCount(rsc.kubeClient.Extensions().ReplicaSets(rs.Namespace), rs, len(filteredPods), fullyLabeledReplicasCount, readyReplicasCount); err != nil {
 		// Multiple things could lead to this update failing. Requeuing the replica set ensures
 		// we retry with some fairness.
 		glog.V(2).Infof("Failed to update replica count for controller %v/%v; requeuing; error: %v", rs.Namespace, rs.Name, err)

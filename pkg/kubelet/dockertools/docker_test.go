@@ -184,6 +184,11 @@ func TestMatchImageTagOrSHA(t *testing.T) {
 			Output:    true,
 		},
 		{
+			Inspected: dockertypes.ImageInspect{RepoTags: []string{"docker.io/kubernetes/pause:latest"}},
+			Image:     "kubernetes/pause:latest",
+			Output:    true,
+		},
+		{
 			Inspected: dockertypes.ImageInspect{
 				ID: "sha256:2208f7a29005d226d1ee33a63e33af1f47af6156c740d7d23c7948e8d282d53d",
 			},
@@ -713,7 +718,7 @@ func TestFindContainersByPod(t *testing.T) {
 		},
 	}
 	fakeClient := NewFakeDockerClient()
-	np, _ := network.InitNetworkPlugin([]network.NetworkPlugin{}, "", nettest.NewFakeHost(nil), componentconfig.HairpinNone, "10.0.0.0/8")
+	np, _ := network.InitNetworkPlugin([]network.NetworkPlugin{}, "", nettest.NewFakeHost(nil), componentconfig.HairpinNone, "10.0.0.0/8", network.UseDefaultMTU)
 	// image back-off is set to nil, this test should not pull images
 	containerManager := NewFakeDockerManager(fakeClient, &record.FakeRecorder{}, nil, nil, &cadvisorapi.MachineInfo{}, "", 0, 0, "", &containertest.FakeOS{}, np, nil, nil, nil)
 	for i, test := range tests {

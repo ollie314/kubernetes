@@ -19,11 +19,12 @@ package persistentvolume
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/apis/storage"
 	"k8s.io/kubernetes/pkg/client/cache"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/record"
@@ -153,14 +154,11 @@ const createProvisionedPVInterval = 10 * time.Second
 // framework.Controllers that watch PersistentVolume and PersistentVolumeClaim
 // changes.
 type PersistentVolumeController struct {
-	volumeController          *framework.Controller
-	volumeControllerStopCh    chan struct{}
-	volumeSource              cache.ListerWatcher
+	volumeController          framework.ControllerInterface
+	pvInformer                framework.SharedIndexInformer
 	claimController           *framework.Controller
-	claimControllerStopCh     chan struct{}
 	claimSource               cache.ListerWatcher
 	classReflector            *cache.Reflector
-	classReflectorStopCh      chan struct{}
 	classSource               cache.ListerWatcher
 	kubeClient                clientset.Interface
 	eventRecorder             record.EventRecorder
@@ -177,6 +175,13 @@ type PersistentVolumeController struct {
 	volumes persistentVolumeOrderedIndex
 	claims  cache.Store
 	classes cache.Store
+
+	// isInformerInternal is true if the informer we hold is a personal informer,
+	// false if it is a shared informer. If we're using a normal shared informer,
+	// then the informer will be started for us. If we have a personal informer,
+	// we must start it ourselves. If you start the controller using
+	// NewPersistentVolumeController(passing SharedInformer), this will be false.
+	isInformerInternal bool
 
 	// Map of scheduled/running operations.
 	runningOperations goroutinemap.GoRoutineMap
@@ -1237,6 +1242,19 @@ func (ctrl *PersistentVolumeController) provisionClaimOperation(claimObj interfa
 		// syncVolume() call.
 		return
 	}
+	if plugin == nil {
+		// findProvisionablePlugin returned no error nor plugin.
+		// This means that an unknown provisioner is requested. Report an event
+		// and wait for the external provisioner
+		if storageClass != nil {
+			msg := fmt.Sprintf("cannot find provisioner %q, expecting that a volume for the claim is provisioned either manually or via external software", storageClass.Provisioner)
+			ctrl.eventRecorder.Event(claim, api.EventTypeNormal, "ExternalProvisioning", msg)
+			glog.V(3).Infof("provisioning claim %q: %s", claimToClaimKey(claim), msg)
+		} else {
+			glog.V(3).Infof("cannot find storage class for claim %q", claimToClaimKey(claim))
+		}
+		return
+	}
 
 	// Gather provisioning options
 	tags := make(map[string]string)
@@ -1369,7 +1387,10 @@ func (ctrl *PersistentVolumeController) scheduleOperation(operationName string, 
 	}
 }
 
-func (ctrl *PersistentVolumeController) findProvisionablePlugin(claim *api.PersistentVolumeClaim) (vol.ProvisionableVolumePlugin, *extensions.StorageClass, error) {
+// findProvisionablePlugin finds a provisioner plugin for a given claim.
+// It returns either the provisioning plugin or nil when an external
+// provisioner is requested.
+func (ctrl *PersistentVolumeController) findProvisionablePlugin(claim *api.PersistentVolumeClaim) (vol.ProvisionableVolumePlugin, *storage.StorageClass, error) {
 	// TODO: remove this alpha behavior in 1.5
 	alpha := hasAnnotation(claim.ObjectMeta, annAlphaClass)
 	beta := hasAnnotation(claim.ObjectMeta, annClass)
@@ -1394,7 +1415,7 @@ func (ctrl *PersistentVolumeController) findProvisionablePlugin(claim *api.Persi
 	if !found {
 		return nil, nil, fmt.Errorf("StorageClass %q not found", claimClass)
 	}
-	class, ok := classObj.(*extensions.StorageClass)
+	class, ok := classObj.(*storage.StorageClass)
 	if !ok {
 		return nil, nil, fmt.Errorf("Cannot convert object to StorageClass: %+v", classObj)
 	}
@@ -1402,7 +1423,11 @@ func (ctrl *PersistentVolumeController) findProvisionablePlugin(claim *api.Persi
 	// Find a plugin for the class
 	plugin, err := ctrl.volumePluginMgr.FindProvisionablePluginByName(class.Provisioner)
 	if err != nil {
-		return nil, nil, err
+		if !strings.HasPrefix(class.Provisioner, "kubernetes.io/") {
+			// External provisioner is requested, do not report error
+			return nil, class, nil
+		}
+		return nil, class, err
 	}
 	return plugin, class, nil
 }
@@ -1410,13 +1435,13 @@ func (ctrl *PersistentVolumeController) findProvisionablePlugin(claim *api.Persi
 // findAlphaProvisionablePlugin returns a volume plugin compatible with
 // Kubernetes 1.3.
 // TODO: remove in Kubernetes 1.5
-func (ctrl *PersistentVolumeController) findAlphaProvisionablePlugin() (vol.ProvisionableVolumePlugin, *extensions.StorageClass, error) {
+func (ctrl *PersistentVolumeController) findAlphaProvisionablePlugin() (vol.ProvisionableVolumePlugin, *storage.StorageClass, error) {
 	if ctrl.alphaProvisioner == nil {
 		return nil, nil, fmt.Errorf("cannot find volume plugin for alpha provisioning")
 	}
 
 	// Return a dummy StorageClass instance with no parameters
-	storageClass := &extensions.StorageClass{
+	storageClass := &storage.StorageClass{
 		TypeMeta: unversioned.TypeMeta{
 			Kind: "StorageClass",
 		},

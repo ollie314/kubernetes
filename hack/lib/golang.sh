@@ -37,8 +37,6 @@ kube::golang::server_targets() {
     cmd/kubelet
     cmd/kubemark
     cmd/hyperkube
-    federation/cmd/federation-apiserver
-    federation/cmd/federation-controller-manager
     plugin/cmd/kube-scheduler
   )
   if [ -n "${KUBERNETES_CONTRIB:-}" ]; then
@@ -175,8 +173,6 @@ readonly KUBE_STATIC_LIBRARIES=(
   kube-scheduler
   kube-proxy
   kubectl
-  federation-apiserver
-  federation-controller-manager
 )
 
 kube::golang::is_statically_linked_library() {
@@ -267,10 +263,11 @@ kube::golang::create_gopath_tree() {
   local go_pkg_basedir=$(dirname "${go_pkg_dir}")
 
   mkdir -p "${go_pkg_basedir}"
-  rm -f "${go_pkg_dir}"
 
   # TODO: This symlink should be relative.
-  ln -s "${KUBE_ROOT}" "${go_pkg_dir}"
+  if [[ ! -e "${go_pkg_dir}" || "$(readlink ${go_pkg_dir})" != "${KUBE_ROOT}" ]]; then
+    ln -snf "${KUBE_ROOT}" "${go_pkg_dir}"
+  fi
 }
 
 # Ensure the godep tool exists and is a viable version.

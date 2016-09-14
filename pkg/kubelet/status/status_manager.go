@@ -372,6 +372,10 @@ func (m *manager) syncBatch() {
 		for uid, status := range m.podStatuses {
 			syncedUID := uid
 			if mirrorUID, ok := podToMirror[uid]; ok {
+				if mirrorUID == "" {
+					glog.V(5).Infof("Static pod %q (%s/%s) does not have a corresponding mirror pod; skipping", uid, status.podName, status.podNamespace)
+					continue
+				}
 				syncedUID = mirrorUID
 			}
 			if m.needsUpdate(syncedUID, status) {
@@ -434,7 +438,7 @@ func (m *manager) syncPod(uid types.UID, status versionedPodStatus) {
 			deleteOptions := api.NewDeleteOptions(0)
 			// Use the pod UID as the precondition for deletion to prevent deleting a newly created pod with the same name and namespace.
 			deleteOptions.Preconditions = api.NewUIDPreconditions(string(pod.UID))
-			if err := m.kubeClient.Core().Pods(pod.Namespace).Delete(pod.Name, deleteOptions); err == nil {
+			if err = m.kubeClient.Core().Pods(pod.Namespace).Delete(pod.Name, deleteOptions); err == nil {
 				glog.V(3).Infof("Pod %q fully terminated and removed from etcd", format.Pod(pod))
 				m.deletePodStatus(uid)
 				return

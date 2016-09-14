@@ -86,6 +86,7 @@ func DeepCopy_componentconfig_KubeControllerManagerConfiguration(in interface{},
 		out.LookupCacheSizeForDaemonSet = in.LookupCacheSizeForDaemonSet
 		out.ServiceSyncPeriod = in.ServiceSyncPeriod
 		out.NodeSyncPeriod = in.NodeSyncPeriod
+		out.RouteReconciliationPeriod = in.RouteReconciliationPeriod
 		out.ResourceQuotaSyncPeriod = in.ResourceQuotaSyncPeriod
 		out.NamespaceSyncPeriod = in.NamespaceSyncPeriod
 		out.PVClaimBinderSyncPeriod = in.PVClaimBinderSyncPeriod
@@ -103,6 +104,7 @@ func DeepCopy_componentconfig_KubeControllerManagerConfiguration(in interface{},
 		out.ServiceAccountKeyFile = in.ServiceAccountKeyFile
 		out.ClusterSigningCertFile = in.ClusterSigningCertFile
 		out.ClusterSigningKeyFile = in.ClusterSigningKeyFile
+		out.ApproveAllKubeletCSRsForGroup = in.ApproveAllKubeletCSRsForGroup
 		out.EnableProfiling = in.EnableProfiling
 		out.ClusterName = in.ClusterName
 		out.ClusterCIDR = in.ClusterCIDR
@@ -256,7 +258,10 @@ func DeepCopy_componentconfig_KubeletConfiguration(in interface{}, out interface
 		out.LowDiskSpaceThresholdMB = in.LowDiskSpaceThresholdMB
 		out.VolumeStatsAggPeriod = in.VolumeStatsAggPeriod
 		out.NetworkPluginName = in.NetworkPluginName
+		out.NetworkPluginMTU = in.NetworkPluginMTU
 		out.NetworkPluginDir = in.NetworkPluginDir
+		out.CNIConfDir = in.CNIConfDir
+		out.CNIBinDir = in.CNIBinDir
 		out.VolumePluginDir = in.VolumePluginDir
 		out.CloudProvider = in.CloudProvider
 		out.CloudConfigFile = in.CloudConfigFile
@@ -266,6 +271,8 @@ func DeepCopy_componentconfig_KubeletConfiguration(in interface{}, out interface
 		out.SystemCgroups = in.SystemCgroups
 		out.CgroupRoot = in.CgroupRoot
 		out.ContainerRuntime = in.ContainerRuntime
+		out.RemoteRuntimeEndpoint = in.RemoteRuntimeEndpoint
+		out.RemoteImageEndpoint = in.RemoteImageEndpoint
 		out.RuntimeRequestTimeout = in.RuntimeRequestTimeout
 		out.RktPath = in.RktPath
 		out.RktAPIEndpoint = in.RktAPIEndpoint
@@ -333,6 +340,13 @@ func DeepCopy_componentconfig_KubeletConfiguration(in interface{}, out interface
 		out.MakeIPTablesUtilChains = in.MakeIPTablesUtilChains
 		out.IPTablesMasqueradeBit = in.IPTablesMasqueradeBit
 		out.IPTablesDropBit = in.IPTablesDropBit
+		if in.AllowedUnsafeSysctls != nil {
+			in, out := &in.AllowedUnsafeSysctls, &out.AllowedUnsafeSysctls
+			*out = make([]string, len(*in))
+			copy(*out, *in)
+		} else {
+			out.AllowedUnsafeSysctls = nil
+		}
 		return nil
 	}
 }

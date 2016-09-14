@@ -24,6 +24,7 @@ import (
 	"strconv"
 
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
@@ -40,6 +41,12 @@ type rcStrategy struct {
 
 // Strategy is the default logic that applies when creating and updating Replication Controller objects.
 var Strategy = rcStrategy{api.Scheme, api.SimpleNameGenerator}
+
+// DefaultGarbageCollectionPolicy returns Orphan because that was the default
+// behavior before the server-side garbage collection was implemented.
+func (rcStrategy) DefaultGarbageCollectionPolicy() rest.GarbageCollectionPolicy {
+	return rest.OrphanDependents
+}
 
 // NamespaceScoped returns true because all Replication Controllers need to be within a namespace.
 func (rcStrategy) NamespaceScoped() bool {
@@ -103,7 +110,7 @@ func (rcStrategy) AllowUnconditionalUpdate() bool {
 
 // ControllerToSelectableFields returns a field set that represents the object.
 func ControllerToSelectableFields(controller *api.ReplicationController) fields.Set {
-	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(controller.ObjectMeta, true)
+	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(&controller.ObjectMeta, true)
 	controllerSpecificFieldsSet := fields.Set{
 		"status.replicas": strconv.Itoa(int(controller.Status.Replicas)),
 	}
@@ -113,7 +120,7 @@ func ControllerToSelectableFields(controller *api.ReplicationController) fields.
 // MatchController is the filter used by the generic etcd backend to route
 // watch events from etcd to clients of the apiserver only interested in specific
 // labels/fields.
-func MatchController(label labels.Selector, field fields.Selector) generic.Matcher {
+func MatchController(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
 	return &generic.SelectionPredicate{
 		Label: label,
 		Field: field,

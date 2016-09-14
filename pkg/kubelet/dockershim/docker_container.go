@@ -25,6 +25,7 @@ import (
 	dockercontainer "github.com/docker/engine-api/types/container"
 	dockerfilters "github.com/docker/engine-api/types/filters"
 	dockerstrslice "github.com/docker/engine-api/types/strslice"
+	"github.com/golang/glog"
 
 	runtimeApi "k8s.io/kubernetes/pkg/kubelet/api/v1alpha1/runtime"
 	"k8s.io/kubernetes/pkg/kubelet/dockertools"
@@ -38,9 +39,6 @@ func (ds *dockerService) ListContainers(filter *runtimeApi.ContainerFilter) ([]*
 	f := newDockerFilter(&opts.Filter)
 
 	if filter != nil {
-		if filter.Name != nil {
-			f.Add("name", filter.GetName())
-		}
 		if filter.Id != nil {
 			f.Add("id", filter.GetId())
 		}
@@ -65,8 +63,16 @@ func (ds *dockerService) ListContainers(filter *runtimeApi.ContainerFilter) ([]*
 	}
 	// Convert docker to runtime api containers.
 	result := []*runtimeApi.Container{}
-	for _, c := range containers {
-		result = append(result, toRuntimeAPIContainer(&c))
+	for i := range containers {
+		c := containers[i]
+
+		converted, err := toRuntimeAPIContainer(&c)
+		if err != nil {
+			glog.V(5).Infof("Unable to convert docker to runtime API container: %v", err)
+			continue
+		}
+
+		result = append(result, converted)
 	}
 	return result, nil
 }
@@ -79,7 +85,7 @@ func (ds *dockerService) CreateContainer(podSandboxID string, config *runtimeApi
 		return "", fmt.Errorf("container config is nil")
 	}
 	if sandboxConfig == nil {
-		return "", fmt.Errorf("sandbox config is nil for container %q", config.GetName())
+		return "", fmt.Errorf("sandbox config is nil for container %q", config.Metadata.GetName())
 	}
 
 	// Merge annotations and labels because docker supports only labels.
@@ -94,7 +100,7 @@ func (ds *dockerService) CreateContainer(podSandboxID string, config *runtimeApi
 		image = iSpec.GetImage()
 	}
 	createConfig := dockertypes.ContainerCreateConfig{
-		Name: config.GetName(),
+		Name: makeContainerName(sandboxConfig, config),
 		Config: &dockercontainer.Config{
 			// TODO: set User.
 			Hostname:   sandboxConfig.GetHostname(),
@@ -274,9 +280,14 @@ func (ds *dockerService) ContainerStatus(containerID string) (*runtimeApi.Contai
 	ct, st, ft := createdAt.Unix(), startedAt.Unix(), finishedAt.Unix()
 	exitCode := int32(r.State.ExitCode)
 
+	metadata, err := parseContainerName(r.Name)
+	if err != nil {
+		return nil, err
+	}
+
 	return &runtimeApi.ContainerStatus{
 		Id:         &r.ID,
-		Name:       &r.Name,
+		Metadata:   metadata,
 		Image:      &runtimeApi.ImageSpec{Image: &r.Config.Image},
 		ImageRef:   &r.Image,
 		Mounts:     mounts,

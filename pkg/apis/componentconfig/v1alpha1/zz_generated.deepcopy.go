@@ -239,6 +239,9 @@ func DeepCopy_v1alpha1_KubeletConfiguration(in interface{}, out interface{}, c *
 		out.VolumeStatsAggPeriod = in.VolumeStatsAggPeriod
 		out.NetworkPluginName = in.NetworkPluginName
 		out.NetworkPluginDir = in.NetworkPluginDir
+		out.CNIConfDir = in.CNIConfDir
+		out.CNIBinDir = in.CNIBinDir
+		out.NetworkPluginMTU = in.NetworkPluginMTU
 		out.VolumePluginDir = in.VolumePluginDir
 		out.CloudProvider = in.CloudProvider
 		out.CloudConfigFile = in.CloudConfigFile
@@ -254,6 +257,8 @@ func DeepCopy_v1alpha1_KubeletConfiguration(in interface{}, out interface{}, c *
 			out.CgroupsPerQOS = nil
 		}
 		out.ContainerRuntime = in.ContainerRuntime
+		out.RemoteRuntimeEndpoint = in.RemoteRuntimeEndpoint
+		out.RemoteImageEndpoint = in.RemoteImageEndpoint
 		out.RuntimeRequestTimeout = in.RuntimeRequestTimeout
 		out.RktPath = in.RktPath
 		out.RktAPIEndpoint = in.RktAPIEndpoint
@@ -398,6 +403,13 @@ func DeepCopy_v1alpha1_KubeletConfiguration(in interface{}, out interface{}, c *
 			**out = **in
 		} else {
 			out.IPTablesDropBit = nil
+		}
+		if in.AllowedUnsafeSysctls != nil {
+			in, out := &in.AllowedUnsafeSysctls, &out.AllowedUnsafeSysctls
+			*out = make([]string, len(*in))
+			copy(*out, *in)
+		} else {
+			out.AllowedUnsafeSysctls = nil
 		}
 		return nil
 	}

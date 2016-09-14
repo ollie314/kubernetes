@@ -30,6 +30,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/autoscaling"
 	"k8s.io/kubernetes/pkg/apis/batch"
 	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/apis/rbac"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -416,6 +417,20 @@ func FuzzerFor(t *testing.T, version unversioned.GroupVersion, src rand.Source) 
 			types := []api.PersistentVolumeClaimPhase{api.ClaimBound, api.ClaimPending, api.ClaimLost}
 			pvc.Status.Phase = types[c.Rand.Intn(len(types))]
 		},
+		func(obj *api.AzureDiskVolumeSource, c fuzz.Continue) {
+			if obj.CachingMode == nil {
+				obj.CachingMode = new(api.AzureDataDiskCachingMode)
+				*obj.CachingMode = api.AzureDataDiskCachingNone
+			}
+			if obj.FSType == nil {
+				obj.FSType = new(string)
+				*obj.FSType = "ext4"
+			}
+			if obj.ReadOnly == nil {
+				obj.ReadOnly = new(bool)
+				*obj.ReadOnly = false
+			}
+		},
 		func(s *api.NamespaceSpec, c fuzz.Continue) {
 			s.Finalizers = []api.FinalizerName{api.FinalizerKubernetes}
 		},
@@ -482,6 +497,14 @@ func FuzzerFor(t *testing.T, version unversioned.GroupVersion, src rand.Source) 
 						},
 					},
 				}
+			}
+		},
+		func(r *rbac.RoleRef, c fuzz.Continue) {
+			c.FuzzNoCustom(r) // fuzz self without calling this function again
+
+			// match defaulter
+			if len(r.APIGroup) == 0 {
+				r.APIGroup = rbac.GroupName
 			}
 		},
 		func(r *runtime.RawExtension, c fuzz.Continue) {

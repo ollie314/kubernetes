@@ -215,7 +215,7 @@ func InstallLogsSupport(mux Mux, container *restful.Container) {
 	ws := new(restful.WebService)
 	ws.Path("/logs")
 	ws.Doc("get log files")
-	ws.Route(ws.GET("/{logpath:*}").To(logFileHandler))
+	ws.Route(ws.GET("/{logpath:*}").To(logFileHandler).Param(ws.PathParameter("logpath", "path to the log").DataType("string")))
 	ws.Route(ws.GET("/").To(logFileListHandler))
 
 	container.Add(ws)
@@ -266,7 +266,13 @@ func InstallServiceErrorHandler(s runtime.NegotiatedSerializer, container *restf
 }
 
 func serviceErrorHandler(s runtime.NegotiatedSerializer, requestResolver *RequestInfoResolver, apiVersions []string, serviceErr restful.ServiceError, request *restful.Request, response *restful.Response) {
-	errorNegotiated(apierrors.NewGenericServerResponse(serviceErr.Code, "", api.Resource(""), "", "", 0, false), s, unversioned.GroupVersion{}, response.ResponseWriter, request.Request)
+	errorNegotiated(
+		apierrors.NewGenericServerResponse(serviceErr.Code, "", api.Resource(""), "", serviceErr.Message, 0, false),
+		s,
+		unversioned.GroupVersion{},
+		response.ResponseWriter,
+		request.Request,
+	)
 }
 
 // Adds a service to return the supported api versions at the legacy /api.
@@ -451,7 +457,7 @@ func write(statusCode int, gv unversioned.GroupVersion, s runtime.NegotiatedSeri
 		defer out.Close()
 
 		if wsstream.IsWebSocketRequest(req) {
-			r := wsstream.NewReader(out, true)
+			r := wsstream.NewReader(out, true, wsstream.NewDefaultReaderProtocols())
 			if err := r.Copy(w, req); err != nil {
 				utilruntime.HandleError(fmt.Errorf("error encountered while streaming results via websocket: %v", err))
 			}

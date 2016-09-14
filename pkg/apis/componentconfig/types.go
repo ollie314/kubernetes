@@ -66,7 +66,7 @@ type KubeProxyConfiguration struct {
 	// Must be greater than 0. Only applicable for proxyMode=userspace.
 	UDPIdleTimeout unversioned.Duration `json:"udpTimeoutMilliseconds"`
 	// conntrackMax is the maximum number of NAT connections to track (0 to
-	// leave as-is).  This takes precendence over conntrackMaxPerCore.
+	// leave as-is).  This takes precedence over conntrackMaxPerCore.
 	ConntrackMax int32 `json:"conntrackMax"`
 	// conntrackMaxPerCore is the maximum number of NAT connections to track
 	// per CPU core (0 to leave as-is).  This value is only considered if
@@ -233,7 +233,7 @@ type KubeletConfiguration struct {
 	// status to master. Note: be cautious when changing the constant, it
 	// must work with nodeMonitorGracePeriod in nodecontroller.
 	NodeStatusUpdateFrequency unversioned.Duration `json:"nodeStatusUpdateFrequency"`
-	// imageMinimumGCAge is the minimum age for a unused image before it is
+	// imageMinimumGCAge is the minimum age for an unused image before it is
 	// garbage collected.
 	ImageMinimumGCAge unversioned.Duration `json:"imageMinimumGCAge"`
 	// imageGCHighThresholdPercent is the percent of disk usage after which
@@ -252,9 +252,19 @@ type KubeletConfiguration struct {
 	// networkPluginName is the name of the network plugin to be invoked for
 	// various events in kubelet/pod lifecycle
 	NetworkPluginName string `json:"networkPluginName"`
+	// networkPluginMTU is the MTU to be passed to the network plugin,
+	// and overrides the default MTU for cases where it cannot be automatically
+	// computed (such as IPSEC).
+	NetworkPluginMTU int32 `json:"networkPluginMTU"`
 	// networkPluginDir is the full path of the directory in which to search
-	// for network plugins
+	// for network plugins (and, for backwards-compat, CNI config files)
 	NetworkPluginDir string `json:"networkPluginDir"`
+	// CNIConfDir is the full path of the directory in which to search for
+	// CNI config files
+	CNIConfDir string `json:"cniConfDir"`
+	// CNIBinDir is the full path of the directory in which to search for
+	// CNI plugin binaries
+	CNIBinDir string `json:"cniBinDir"`
 	// volumePluginDir is the full path of the directory in which to search
 	// for additional third party volume plugins
 	VolumePluginDir string `json:"volumePluginDir"`
@@ -279,6 +289,10 @@ type KubeletConfiguration struct {
 	CgroupRoot string `json:"cgroupRoot,omitempty"`
 	// containerRuntime is the container runtime to use.
 	ContainerRuntime string `json:"containerRuntime"`
+	// remoteRuntimeEndpoint is the endpoint of remote runtime service
+	RemoteRuntimeEndpoint string `json:"remoteRuntimeEndpoint"`
+	// remoteImageEndpoint is the endpoint of remote image service
+	RemoteImageEndpoint string `json:"remoteImageEndpoint"`
 	// runtimeRequestTimeout is the timeout for all runtime requests except long running
 	// requests - pull, logs, exec and attach.
 	RuntimeRequestTimeout unversioned.Duration `json:"runtimeRequestTimeout,omitempty"`
@@ -411,6 +425,8 @@ type KubeletConfiguration struct {
 	// iptablesDropBit is the bit of the iptables fwmark space to use for dropping packets. Kubelet will ensure iptables mark and drop rules.
 	// Values must be within the range [0, 31]. Must be different from IPTablesMasqueradeBit
 	IPTablesDropBit int32 `json:"iptablesDropBit"`
+	// Whitelist of unsafe sysctls or sysctl patterns (ending in *).
+	AllowedUnsafeSysctls []string `json:"experimentalAllowedUnsafeSysctls,omitempty"`
 }
 
 type KubeSchedulerConfiguration struct {
@@ -536,6 +552,8 @@ type KubeControllerManagerConfiguration struct {
 	// periods will result in fewer calls to cloud provider, but may delay addition
 	// of new nodes to cluster.
 	NodeSyncPeriod unversioned.Duration `json:"nodeSyncPeriod"`
+	// routeReconciliationPeriod is the period for reconciling routes created for Nodes by cloud provider..
+	RouteReconciliationPeriod unversioned.Duration `json:"routeReconciliationPeriod"`
 	// resourceQuotaSyncPeriod is the period for syncing quota usage status
 	// in the system.
 	ResourceQuotaSyncPeriod unversioned.Duration `json:"resourceQuotaSyncPeriod"`
@@ -587,6 +605,12 @@ type KubeControllerManagerConfiguration struct {
 	// clusterSigningCertFile is the filename containing a PEM-encoded
 	// RSA or ECDSA private key used to issue cluster-scoped certificates
 	ClusterSigningKeyFile string `json:"clusterSigningKeyFile"`
+	// approveAllKubeletCSRs tells the CSR controller to approve all CSRs originating
+	// from the kubelet bootstrapping group automatically.
+	// WARNING: this grants all users with access to the certificates API group
+	// the ability to create credentials for any user that has access to the boostrapping
+	// user's credentials.
+	ApproveAllKubeletCSRsForGroup string `json:"approveAllKubeletCSRsForGroup"`
 	// enableProfiling enables profiling via web interface host:port/debug/pprof/
 	EnableProfiling bool `json:"enableProfiling"`
 	// clusterName is the instance prefix for the cluster.

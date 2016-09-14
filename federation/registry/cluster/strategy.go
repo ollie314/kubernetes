@@ -41,10 +41,10 @@ func (clusterStrategy) NamespaceScoped() bool {
 }
 
 func ClusterToSelectableFields(cluster *federation.Cluster) fields.Set {
-	return generic.ObjectMetaFieldsSet(cluster.ObjectMeta, false)
+	return generic.ObjectMetaFieldsSet(&cluster.ObjectMeta, false)
 }
 
-func MatchCluster(label labels.Selector, field fields.Selector) generic.Matcher {
+func MatchCluster(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
 	return &generic.SelectionPredicate{
 		Label: label,
 		Field: field,

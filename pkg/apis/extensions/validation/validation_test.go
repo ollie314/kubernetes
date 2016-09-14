@@ -24,6 +24,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/security/apparmor"
 	psputil "k8s.io/kubernetes/pkg/security/podsecuritypolicy/util"
 	"k8s.io/kubernetes/pkg/util/intstr"
 	"k8s.io/kubernetes/pkg/util/validation/field"
@@ -1510,7 +1511,10 @@ func TestValidateReplicaSet(t *testing.T) {
 func TestValidatePodSecurityPolicy(t *testing.T) {
 	validPSP := func() *extensions.PodSecurityPolicy {
 		return &extensions.PodSecurityPolicy{
-			ObjectMeta: api.ObjectMeta{Name: "foo"},
+			ObjectMeta: api.ObjectMeta{
+				Name:        "foo",
+				Annotations: map[string]string{},
+			},
 			Spec: extensions.PodSecurityPolicySpec{
 				SELinux: extensions.SELinuxStrategyOptions{
 					Rule: extensions.SELinuxStrategyRunAsAny,
@@ -1584,11 +1588,24 @@ func TestValidatePodSecurityPolicy(t *testing.T) {
 	allowedCapListedInRequiredDrop.Spec.RequiredDropCapabilities = []api.Capability{"foo"}
 	allowedCapListedInRequiredDrop.Spec.AllowedCapabilities = []api.Capability{"foo"}
 
-	errorCases := map[string]struct {
+	invalidAppArmorDefault := validPSP()
+	invalidAppArmorDefault.Annotations = map[string]string{
+		apparmor.DefaultProfileAnnotationKey: "not-good",
+	}
+	invalidAppArmorAllowed := validPSP()
+	invalidAppArmorAllowed.Annotations = map[string]string{
+		apparmor.AllowedProfilesAnnotationKey: apparmor.ProfileRuntimeDefault + ",not-good",
+	}
+
+	invalidSysctlPattern := validPSP()
+	invalidSysctlPattern.Annotations[extensions.SysctlsPodSecurityPolicyAnnotationKey] = "a.*.b"
+
+	type testCase struct {
 		psp         *extensions.PodSecurityPolicy
 		errorType   field.ErrorType
 		errorDetail string
-	}{
+	}
+	errorCases := map[string]testCase{
 		"no user options": {
 			psp:         noUserOptions,
 			errorType:   field.ErrorTypeNotSupported,
@@ -1664,6 +1681,21 @@ func TestValidatePodSecurityPolicy(t *testing.T) {
 			errorType:   field.ErrorTypeInvalid,
 			errorDetail: "capability is listed in allowedCapabilities and requiredDropCapabilities",
 		},
+		"invalid AppArmor default profile": {
+			psp:         invalidAppArmorDefault,
+			errorType:   field.ErrorTypeInvalid,
+			errorDetail: "invalid AppArmor profile name: \"not-good\"",
+		},
+		"invalid AppArmor allowed profile": {
+			psp:         invalidAppArmorAllowed,
+			errorType:   field.ErrorTypeInvalid,
+			errorDetail: "invalid AppArmor profile name: \"not-good\"",
+		},
+		"invalid sysctl pattern": {
+			psp:         invalidSysctlPattern,
+			errorType:   field.ErrorTypeInvalid,
+			errorDetail: fmt.Sprintf("must have at most 253 characters and match regex %s", SysctlPatternFmt),
+		},
 	}
 
 	for k, v := range errorCases {
@@ -1673,10 +1705,33 @@ func TestValidatePodSecurityPolicy(t *testing.T) {
 			continue
 		}
 		if errs[0].Type != v.errorType {
-			t.Errorf("%s received an unexpected error type.  Expected: %v got: %v", k, v.errorType, errs[0].Type)
+			t.Errorf("[%s] received an unexpected error type.  Expected: '%s' got: '%s'", k, v.errorType, errs[0].Type)
 		}
 		if errs[0].Detail != v.errorDetail {
-			t.Errorf("%s received an unexpected error detail.  Expected %v got: %v", k, v.errorDetail, errs[0].Detail)
+			t.Errorf("[%s] received an unexpected error detail.  Expected '%s' got: '%s'", k, v.errorDetail, errs[0].Detail)
+		}
+	}
+
+	// Update error is different for 'missing object meta name'.
+	errorCases["missing object meta name"] = testCase{
+		psp:         errorCases["missing object meta name"].psp,
+		errorType:   field.ErrorTypeInvalid,
+		errorDetail: "field is immutable",
+	}
+
+	// Should not be able to update to an invalid policy.
+	for k, v := range errorCases {
+		v.psp.ResourceVersion = "444" // Required for updates.
+		errs := ValidatePodSecurityPolicyUpdate(validPSP(), v.psp)
+		if len(errs) == 0 {
+			t.Errorf("[%s] expected update errors but got none", k)
+			continue
+		}
+		if errs[0].Type != v.errorType {
+			t.Errorf("[%s] received an unexpected error type.  Expected: '%s' got: '%s'", k, v.errorType, errs[0].Type)
+		}
+		if errs[0].Detail != v.errorDetail {
+			t.Errorf("[%s] received an unexpected error detail.  Expected '%s' got: '%s'", k, v.errorDetail, errs[0].Detail)
 		}
 	}
 
@@ -1700,6 +1755,15 @@ func TestValidatePodSecurityPolicy(t *testing.T) {
 	caseInsensitiveAllowedDrop.Spec.RequiredDropCapabilities = []api.Capability{"FOO"}
 	caseInsensitiveAllowedDrop.Spec.AllowedCapabilities = []api.Capability{"foo"}
 
+	validAppArmor := validPSP()
+	validAppArmor.Annotations = map[string]string{
+		apparmor.DefaultProfileAnnotationKey:  apparmor.ProfileRuntimeDefault,
+		apparmor.AllowedProfilesAnnotationKey: apparmor.ProfileRuntimeDefault + "," + apparmor.ProfileNamePrefix + "foo",
+	}
+
+	withSysctl := validPSP()
+	withSysctl.Annotations[extensions.SysctlsPodSecurityPolicyAnnotationKey] = "net.*"
+
 	successCases := map[string]struct {
 		psp *extensions.PodSecurityPolicy
 	}{
@@ -1718,11 +1782,23 @@ func TestValidatePodSecurityPolicy(t *testing.T) {
 		"comparison for allowed -> drop is case sensitive": {
 			psp: caseInsensitiveAllowedDrop,
 		},
+		"valid AppArmor annotations": {
+			psp: validAppArmor,
+		},
+		"with network sysctls": {
+			psp: withSysctl,
+		},
 	}
 
 	for k, v := range successCases {
 		if errs := ValidatePodSecurityPolicy(v.psp); len(errs) != 0 {
 			t.Errorf("Expected success for %s, got %v", k, errs)
+		}
+
+		// Should be able to update to a valid PSP.
+		v.psp.ResourceVersion = "444" // Required for updates.
+		if errs := ValidatePodSecurityPolicyUpdate(validPSP(), v.psp); len(errs) != 0 {
+			t.Errorf("Expected success for %s update, got %v", k, errs)
 		}
 	}
 }
@@ -2000,85 +2076,60 @@ func TestValidateNetworkPolicyUpdate(t *testing.T) {
 	}
 }
 
+func TestIsValidSysctlPattern(t *testing.T) {
+	valid := []string{
+		"a.b.c.d",
+		"a",
+		"a_b",
+		"a-b",
+		"abc",
+		"abc.def",
+		"*",
+		"a.*",
+		"*",
+		"abc*",
+		"a.abc*",
+		"a.b.*",
+	}
+	invalid := []string{
+		"",
+		"ä",
+		"a_",
+		"_",
+		"_a",
+		"_a._b",
+		"__",
+		"-",
+		".",
+		"a.",
+		".a",
+		"a.b.",
+		"a*.b",
+		"a*b",
+		"*a",
+		"Abc",
+		func(n int) string {
+			x := make([]byte, n)
+			for i := range x {
+				x[i] = byte('a')
+			}
+			return string(x)
+		}(256),
+	}
+	for _, s := range valid {
+		if !IsValidSysctlPattern(s) {
+			t.Errorf("%q expected to be a valid sysctl pattern", s)
+		}
+	}
+	for _, s := range invalid {
+		if IsValidSysctlPattern(s) {
+			t.Errorf("%q expected to be an invalid sysctl pattern", s)
+		}
+	}
+}
+
 func newBool(val bool) *bool {
 	p := new(bool)
 	*p = val
 	return p
-}
-
-func TestValidateStorageClass(t *testing.T) {
-	successCases := []extensions.StorageClass{
-		{
-			// empty parameters
-			ObjectMeta:  api.ObjectMeta{Name: "foo"},
-			Provisioner: "kubernetes.io/foo-provisioner",
-			Parameters:  map[string]string{},
-		},
-		{
-			// nil parameters
-			ObjectMeta:  api.ObjectMeta{Name: "foo"},
-			Provisioner: "kubernetes.io/foo-provisioner",
-		},
-		{
-			// some parameters
-			ObjectMeta:  api.ObjectMeta{Name: "foo"},
-			Provisioner: "kubernetes.io/foo-provisioner",
-			Parameters: map[string]string{
-				"kubernetes.io/foo-parameter": "free/form/string",
-				"foo-parameter":               "free-form-string",
-				"foo-parameter2":              "{\"embedded\": \"json\", \"with\": {\"structures\":\"inside\"}}",
-			},
-		},
-	}
-
-	// Success cases are expected to pass validation.
-	for k, v := range successCases {
-		if errs := ValidateStorageClass(&v); len(errs) != 0 {
-			t.Errorf("Expected success for %d, got %v", k, errs)
-		}
-	}
-
-	// generate a map longer than maxProvisionerParameterSize
-	longParameters := make(map[string]string)
-	totalSize := 0
-	for totalSize < maxProvisionerParameterSize {
-		k := fmt.Sprintf("param/%d", totalSize)
-		v := fmt.Sprintf("value-%d", totalSize)
-		longParameters[k] = v
-		totalSize = totalSize + len(k) + len(v)
-	}
-
-	errorCases := map[string]extensions.StorageClass{
-		"namespace is present": {
-			ObjectMeta:  api.ObjectMeta{Name: "foo", Namespace: "bar"},
-			Provisioner: "kubernetes.io/foo-provisioner",
-		},
-		"invalid provisioner": {
-			ObjectMeta:  api.ObjectMeta{Name: "foo"},
-			Provisioner: "kubernetes.io/invalid/provisioner",
-		},
-		"invalid empty parameter name": {
-			ObjectMeta:  api.ObjectMeta{Name: "foo"},
-			Provisioner: "kubernetes.io/foo",
-			Parameters: map[string]string{
-				"": "value",
-			},
-		},
-		"provisioner: Required value": {
-			ObjectMeta:  api.ObjectMeta{Name: "foo"},
-			Provisioner: "",
-		},
-		"too long parameters": {
-			ObjectMeta:  api.ObjectMeta{Name: "foo"},
-			Provisioner: "kubernetes.io/foo",
-			Parameters:  longParameters,
-		},
-	}
-
-	// Error cases are not expected to pass validation.
-	for testName, storageClass := range errorCases {
-		if errs := ValidateStorageClass(&storageClass); len(errs) == 0 {
-			t.Errorf("Expected failure for test: %s", testName)
-		}
-	}
 }

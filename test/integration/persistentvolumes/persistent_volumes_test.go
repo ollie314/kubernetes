@@ -31,7 +31,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/apis/storage"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	fake_cloud "k8s.io/kubernetes/pkg/cloudprovider/providers/fake"
@@ -123,8 +123,9 @@ func TestPersistentVolumeRecycler(t *testing.T) {
 	// non-namespaced objects (PersistenceVolumes).
 	defer testClient.Core().PersistentVolumes().DeleteCollection(nil, api.ListOptions{})
 
-	ctrl.Run()
-	defer ctrl.Stop()
+	stopCh := make(chan struct{})
+	ctrl.Run(stopCh)
+	defer close(stopCh)
 
 	// This PV will be claimed, released, and recycled.
 	pv := createPV("fake-pv-recycler", "/tmp/foo", "10G", []api.PersistentVolumeAccessMode{api.ReadWriteOnce}, api.PersistentVolumeReclaimRecycle)
@@ -176,8 +177,9 @@ func TestPersistentVolumeDeleter(t *testing.T) {
 	// non-namespaced objects (PersistenceVolumes).
 	defer testClient.Core().PersistentVolumes().DeleteCollection(nil, api.ListOptions{})
 
-	ctrl.Run()
-	defer ctrl.Stop()
+	stopCh := make(chan struct{})
+	ctrl.Run(stopCh)
+	defer close(stopCh)
 
 	// This PV will be claimed, released, and deleted.
 	pv := createPV("fake-pv-deleter", "/tmp/foo", "10G", []api.PersistentVolumeAccessMode{api.ReadWriteOnce}, api.PersistentVolumeReclaimDelete)
@@ -234,8 +236,9 @@ func TestPersistentVolumeBindRace(t *testing.T) {
 	// non-namespaced objects (PersistenceVolumes).
 	defer testClient.Core().PersistentVolumes().DeleteCollection(nil, api.ListOptions{})
 
-	ctrl.Run()
-	defer ctrl.Stop()
+	stopCh := make(chan struct{})
+	ctrl.Run(stopCh)
+	defer close(stopCh)
 
 	pv := createPV("fake-pv-race", "/tmp/foo", "10G", []api.PersistentVolumeAccessMode{api.ReadWriteOnce}, api.PersistentVolumeReclaimRetain)
 	pvc := createPVC("fake-pvc-race", ns.Name, "5G", []api.PersistentVolumeAccessMode{api.ReadWriteOnce})
@@ -304,8 +307,9 @@ func TestPersistentVolumeClaimLabelSelector(t *testing.T) {
 	// non-namespaced objects (PersistenceVolumes).
 	defer testClient.Core().PersistentVolumes().DeleteCollection(nil, api.ListOptions{})
 
-	controller.Run()
-	defer controller.Stop()
+	stopCh := make(chan struct{})
+	controller.Run(stopCh)
+	defer close(stopCh)
 
 	var (
 		err     error
@@ -383,8 +387,9 @@ func TestPersistentVolumeClaimLabelSelectorMatchExpressions(t *testing.T) {
 	// non-namespaced objects (PersistenceVolumes).
 	defer testClient.Core().PersistentVolumes().DeleteCollection(nil, api.ListOptions{})
 
-	controller.Run()
-	defer controller.Stop()
+	stopCh := make(chan struct{})
+	controller.Run(stopCh)
+	defer close(stopCh)
 
 	var (
 		err     error
@@ -481,8 +486,9 @@ func TestPersistentVolumeMultiPVs(t *testing.T) {
 	// non-namespaced objects (PersistenceVolumes).
 	defer testClient.Core().PersistentVolumes().DeleteCollection(nil, api.ListOptions{})
 
-	controller.Run()
-	defer controller.Stop()
+	stopCh := make(chan struct{})
+	controller.Run(stopCh)
+	defer close(stopCh)
 
 	maxPVs := getObjectCount()
 	pvs := make([]*api.PersistentVolume, maxPVs)
@@ -569,8 +575,9 @@ func TestPersistentVolumeMultiPVsPVCs(t *testing.T) {
 	// non-namespaced objects (PersistenceVolumes).
 	defer testClient.Core().PersistentVolumes().DeleteCollection(nil, api.ListOptions{})
 
-	binder.Run()
-	defer binder.Stop()
+	controllerStopCh := make(chan struct{})
+	binder.Run(controllerStopCh)
+	defer close(controllerStopCh)
 
 	objCount := getObjectCount()
 	pvs := make([]*api.PersistentVolume, objCount)
@@ -781,8 +788,9 @@ func TestPersistentVolumeControllerStartup(t *testing.T) {
 	}
 
 	// Start the controller when all PVs and PVCs are already saved in etcd
-	binder.Run()
-	defer binder.Stop()
+	stopCh := make(chan struct{})
+	binder.Run(stopCh)
+	defer close(stopCh)
 
 	// wait for at least two sync periods for changes. No volume should be
 	// Released and no claim should be Lost during this time.
@@ -854,9 +862,9 @@ func TestPersistentVolumeProvisionMultiPVCs(t *testing.T) {
 	// NOTE: This test cannot run in parallel, because it is creating and deleting
 	// non-namespaced objects (PersistenceVolumes and StorageClasses).
 	defer testClient.Core().PersistentVolumes().DeleteCollection(nil, api.ListOptions{})
-	defer testClient.Extensions().StorageClasses().DeleteCollection(nil, api.ListOptions{})
+	defer testClient.Storage().StorageClasses().DeleteCollection(nil, api.ListOptions{})
 
-	storageClass := extensions.StorageClass{
+	storageClass := storage.StorageClass{
 		TypeMeta: unversioned.TypeMeta{
 			Kind: "StorageClass",
 		},
@@ -865,10 +873,11 @@ func TestPersistentVolumeProvisionMultiPVCs(t *testing.T) {
 		},
 		Provisioner: provisionerPluginName,
 	}
-	testClient.Extensions().StorageClasses().Create(&storageClass)
+	testClient.Storage().StorageClasses().Create(&storageClass)
 
-	binder.Run()
-	defer binder.Stop()
+	stopCh := make(chan struct{})
+	binder.Run(stopCh)
+	defer close(stopCh)
 
 	objCount := getObjectCount()
 	pvcs := make([]*api.PersistentVolumeClaim, objCount)
@@ -951,8 +960,9 @@ func TestPersistentVolumeMultiPVsDiffAccessModes(t *testing.T) {
 	// non-namespaced objects (PersistenceVolumes).
 	defer testClient.Core().PersistentVolumes().DeleteCollection(nil, api.ListOptions{})
 
-	controller.Run()
-	defer controller.Stop()
+	stopCh := make(chan struct{})
+	controller.Run(stopCh)
+	defer close(stopCh)
 
 	// This PV will be claimed, released, and deleted
 	pv_rwo := createPV("pv-rwo", "/tmp/foo", "10G",
@@ -1116,7 +1126,7 @@ func createClients(ns *api.Namespace, t *testing.T, s *httptest.Server, syncPeri
 	cloud := &fake_cloud.FakeCloud{}
 
 	syncPeriod = getSyncPeriod(syncPeriod)
-	ctrl := persistentvolumecontroller.NewPersistentVolumeController(
+	ctrl := persistentvolumecontroller.NewPersistentVolumeControllerFromClient(
 		binderClient,
 		syncPeriod,
 		nil, // alpha provisioner

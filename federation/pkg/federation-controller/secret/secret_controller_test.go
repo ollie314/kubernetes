@@ -23,41 +23,40 @@ import (
 	"time"
 
 	federation_api "k8s.io/kubernetes/federation/apis/federation/v1beta1"
-	federation_release_1_4 "k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_4"
 	fake_federation_release_1_4 "k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_4/fake"
-	"k8s.io/kubernetes/federation/pkg/federation-controller/util"
+	. "k8s.io/kubernetes/federation/pkg/federation-controller/util/test"
 	api_v1 "k8s.io/kubernetes/pkg/api/v1"
-	"k8s.io/kubernetes/pkg/client/testing/core"
+	kube_release_1_4 "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_4"
+	fake_kube_release_1_4 "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_4/fake"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/watch"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSecretController(t *testing.T) {
-	cluster1 := mkCluster("cluster1", api_v1.ConditionTrue)
-	cluster2 := mkCluster("cluster2", api_v1.ConditionTrue)
+	cluster1 := NewCluster("cluster1", api_v1.ConditionTrue)
+	cluster2 := NewCluster("cluster2", api_v1.ConditionTrue)
 
 	fakeClient := &fake_federation_release_1_4.Clientset{}
-	RegisterList("clusters", fakeClient, &federation_api.ClusterList{Items: []federation_api.Cluster{*cluster1}})
-	RegisterList("secrets", fakeClient, &api_v1.SecretList{Items: []api_v1.Secret{}})
-	secretWatch := RegisterWatch("secrets", fakeClient)
-	clusterWatch := RegisterWatch("clusters", fakeClient)
+	RegisterFakeList("clusters", &fakeClient.Fake, &federation_api.ClusterList{Items: []federation_api.Cluster{*cluster1}})
+	RegisterFakeList("secrets", &fakeClient.Fake, &api_v1.SecretList{Items: []api_v1.Secret{}})
+	secretWatch := RegisterFakeWatch("secrets", &fakeClient.Fake)
+	clusterWatch := RegisterFakeWatch("clusters", &fakeClient.Fake)
 
-	cluster1Client := &fake_federation_release_1_4.Clientset{}
-	cluster1Watch := RegisterWatch("secrets", cluster1Client)
-	RegisterList("secrets", cluster1Client, &api_v1.SecretList{Items: []api_v1.Secret{}})
-	cluster1CreateChan := RegisterCopyOnCreate("secrets", cluster1Client, cluster1Watch)
-	cluster1UpdateChan := RegisterCopyOnUpdate("secrets", cluster1Client, cluster1Watch)
+	cluster1Client := &fake_kube_release_1_4.Clientset{}
+	cluster1Watch := RegisterFakeWatch("secrets", &cluster1Client.Fake)
+	RegisterFakeList("secrets", &cluster1Client.Fake, &api_v1.SecretList{Items: []api_v1.Secret{}})
+	cluster1CreateChan := RegisterFakeCopyOnCreate("secrets", &cluster1Client.Fake, cluster1Watch)
+	cluster1UpdateChan := RegisterFakeCopyOnUpdate("secrets", &cluster1Client.Fake, cluster1Watch)
 
-	cluster2Client := &fake_federation_release_1_4.Clientset{}
-	cluster2Watch := RegisterWatch("secrets", cluster2Client)
-	RegisterList("secrets", cluster2Client, &api_v1.SecretList{Items: []api_v1.Secret{}})
-	cluster2CreateChan := RegisterCopyOnCreate("secrets", cluster2Client, cluster2Watch)
+	cluster2Client := &fake_kube_release_1_4.Clientset{}
+	cluster2Watch := RegisterFakeWatch("secrets", &cluster2Client.Fake)
+	RegisterFakeList("secrets", &cluster2Client.Fake, &api_v1.SecretList{Items: []api_v1.Secret{}})
+	cluster2CreateChan := RegisterFakeCopyOnCreate("secrets", &cluster2Client.Fake, cluster2Watch)
 
 	secretController := NewSecretController(fakeClient)
-	informer := toFederatedInformerForTestOnly(secretController.secretFederatedInformer)
-	informer.SetClientFactory(func(cluster *federation_api.Cluster) (federation_release_1_4.Interface, error) {
+	informer := ToFederatedInformerForTestOnly(secretController.secretFederatedInformer)
+	informer.SetClientFactory(func(cluster *federation_api.Cluster) (kube_release_1_4.Interface, error) {
 		switch cluster.Name {
 		case cluster1.Name:
 			return cluster1Client, nil
@@ -79,7 +78,8 @@ func TestSecretController(t *testing.T) {
 	secret1 := api_v1.Secret{
 		ObjectMeta: api_v1.ObjectMeta{
 			Name:      "test-secret",
-			Namespace: "mynamespace",
+			Namespace: "ns",
+			SelfLink:  "/api/v1/namespaces/ns/secrets/test-secret",
 		},
 		Data: map[string][]byte{
 			"A": []byte("ala ma kota"),
@@ -94,7 +94,7 @@ func TestSecretController(t *testing.T) {
 	assert.NotNil(t, createdSecret)
 	assert.Equal(t, secret1.Namespace, createdSecret.Namespace)
 	assert.Equal(t, secret1.Name, createdSecret.Name)
-	assert.True(t, reflect.DeepEqual(&secret1, createdSecret))
+	assert.True(t, secretsEqual(secret1, *createdSecret))
 
 	// Test update federated secret.
 	secret1.Annotations = map[string]string{
@@ -105,7 +105,18 @@ func TestSecretController(t *testing.T) {
 	assert.NotNil(t, updatedSecret)
 	assert.Equal(t, secret1.Name, updatedSecret.Name)
 	assert.Equal(t, secret1.Namespace, updatedSecret.Namespace)
-	assert.True(t, reflect.DeepEqual(&secret1, updatedSecret))
+	assert.True(t, secretsEqual(secret1, *updatedSecret))
+
+	// Test update federated secret.
+	secret1.Data = map[string][]byte{
+		"config": []byte("myconfigurationfile"),
+	}
+	secretWatch.Modify(&secret1)
+	updatedSecret2 := GetSecretFromChan(cluster1UpdateChan)
+	assert.NotNil(t, updatedSecret)
+	assert.Equal(t, secret1.Name, updatedSecret.Name)
+	assert.Equal(t, secret1.Namespace, updatedSecret.Namespace)
+	assert.True(t, secretsEqual(secret1, *updatedSecret2))
 
 	// Test add cluster
 	clusterWatch.Add(cluster2)
@@ -113,75 +124,18 @@ func TestSecretController(t *testing.T) {
 	assert.NotNil(t, createdSecret2)
 	assert.Equal(t, secret1.Name, createdSecret2.Name)
 	assert.Equal(t, secret1.Namespace, createdSecret2.Namespace)
-	assert.True(t, reflect.DeepEqual(&secret1, createdSecret2))
+	assert.True(t, secretsEqual(secret1, *createdSecret2))
 
 	close(stop)
 }
 
-func toFederatedInformerForTestOnly(informer util.FederatedInformer) util.FederatedInformerForTestOnly {
-	inter := informer.(interface{})
-	return inter.(util.FederatedInformerForTestOnly)
-}
-
-func mkCluster(name string, readyStatus api_v1.ConditionStatus) *federation_api.Cluster {
-	return &federation_api.Cluster{
-		ObjectMeta: api_v1.ObjectMeta{
-			Name: name,
-		},
-		Status: federation_api.ClusterStatus{
-			Conditions: []federation_api.ClusterCondition{
-				{Type: federation_api.ClusterReady, Status: readyStatus},
-			},
-		},
-	}
-}
-
-func RegisterWatch(resource string, client *fake_federation_release_1_4.Clientset) *watch.FakeWatcher {
-	watcher := watch.NewFake()
-	client.AddWatchReactor(resource, func(action core.Action) (bool, watch.Interface, error) { return true, watcher, nil })
-	return watcher
-}
-
-func RegisterList(resource string, client *fake_federation_release_1_4.Clientset, obj runtime.Object) {
-	client.AddReactor("list", resource, func(action core.Action) (bool, runtime.Object, error) {
-		return true, obj, nil
-	})
-}
-
-func RegisterCopyOnCreate(resource string, client *fake_federation_release_1_4.Clientset, watcher *watch.FakeWatcher) chan runtime.Object {
-	objChan := make(chan runtime.Object, 100)
-	client.AddReactor("create", resource, func(action core.Action) (bool, runtime.Object, error) {
-		createAction := action.(core.CreateAction)
-		obj := createAction.GetObject()
-		go func() {
-			watcher.Add(obj)
-			objChan <- obj
-		}()
-		return true, obj, nil
-	})
-	return objChan
-}
-
-func RegisterCopyOnUpdate(resource string, client *fake_federation_release_1_4.Clientset, watcher *watch.FakeWatcher) chan runtime.Object {
-	objChan := make(chan runtime.Object, 100)
-	client.AddReactor("update", resource, func(action core.Action) (bool, runtime.Object, error) {
-		updateAction := action.(core.UpdateAction)
-		obj := updateAction.GetObject()
-		go func() {
-			watcher.Modify(obj)
-			objChan <- obj
-		}()
-		return true, obj, nil
-	})
-	return objChan
+func secretsEqual(a, b api_v1.Secret) bool {
+	a.SelfLink = ""
+	b.SelfLink = ""
+	return reflect.DeepEqual(a, b)
 }
 
 func GetSecretFromChan(c chan runtime.Object) *api_v1.Secret {
-	select {
-	case obj := <-c:
-		secret := obj.(*api_v1.Secret)
-		return secret
-	case <-time.After(time.Minute):
-		return nil
-	}
+	secret := GetObjectFromChan(c).(*api_v1.Secret)
+	return secret
 }

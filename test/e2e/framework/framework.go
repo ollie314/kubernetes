@@ -26,15 +26,17 @@ import (
 	"sync"
 	"time"
 
-	release_1_4 "k8s.io/client-go/1.4/kubernetes"
+	staging "k8s.io/client-go/1.4/kubernetes"
 	"k8s.io/client-go/1.4/pkg/util/sets"
 	clientreporestclient "k8s.io/client-go/1.4/rest"
 	"k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_4"
 	"k8s.io/kubernetes/pkg/api"
 	apierrs "k8s.io/kubernetes/pkg/api/errors"
-	"k8s.io/kubernetes/pkg/client/clientset_generated/release_1_2"
-	"k8s.io/kubernetes/pkg/client/clientset_generated/release_1_3"
+	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/release_1_5"
 	"k8s.io/kubernetes/pkg/client/restclient"
+	"k8s.io/kubernetes/pkg/client/typed/dynamic"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
@@ -57,11 +59,9 @@ type Framework struct {
 	BaseName string
 
 	Client        *client.Client
-	Clientset_1_2 *release_1_2.Clientset
-	Clientset_1_3 *release_1_3.Clientset
-	StagingClient *release_1_4.Clientset
-
-	FederationClientset_1_4 *federation_release_1_4.Clientset
+	Clientset_1_5 *release_1_5.Clientset
+	StagingClient *staging.Clientset
+	ClientPool    dynamic.ClientPool
 
 	Namespace                *api.Namespace   // Every test has at least one namespace
 	namespacesToDelete       []*api.Namespace // Some tests have more than one.
@@ -87,6 +87,10 @@ type Framework struct {
 
 	// will this framework exercise a federated cluster as well
 	federated bool
+
+	// Federation specific params. These are set only if federated = true.
+	FederationClientset_1_4 *federation_release_1_4.Clientset
+	FederationNamespace     *v1.Namespace
 }
 
 type TestDataSummary interface {
@@ -95,8 +99,9 @@ type TestDataSummary interface {
 }
 
 type FrameworkOptions struct {
-	ClientQPS   float32
-	ClientBurst int
+	ClientQPS    float32
+	ClientBurst  int
+	GroupVersion *unversioned.GroupVersion
 }
 
 // NewFramework makes a new framework and sets up a BeforeEach/AfterEach for
@@ -172,27 +177,24 @@ func (f *Framework) BeforeEach() {
 		Expect(err).NotTo(HaveOccurred())
 		config.QPS = f.options.ClientQPS
 		config.Burst = f.options.ClientBurst
+		if f.options.GroupVersion != nil {
+			config.GroupVersion = f.options.GroupVersion
+		}
 		if TestContext.KubeAPIContentType != "" {
 			config.ContentType = TestContext.KubeAPIContentType
 		}
 		c, err := loadClientFromConfig(config)
 		Expect(err).NotTo(HaveOccurred())
 		f.Client = c
-		f.Clientset_1_2, err = release_1_2.NewForConfig(config)
-		f.Clientset_1_3, err = release_1_3.NewForConfig(config)
+		f.Clientset_1_5, err = release_1_5.NewForConfig(config)
 		Expect(err).NotTo(HaveOccurred())
 		clientRepoConfig := getClientRepoConfig(config)
-		f.StagingClient, err = release_1_4.NewForConfig(clientRepoConfig)
+		f.StagingClient, err = staging.NewForConfig(clientRepoConfig)
 		Expect(err).NotTo(HaveOccurred())
+		f.ClientPool = dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
 	}
 
 	if f.federated {
-		if f.FederationClientset_1_4 == nil {
-			By("Creating a release 1.4 federation Clientset")
-			var err error
-			f.FederationClientset_1_4, err = LoadFederationClientset_1_4()
-			Expect(err).NotTo(HaveOccurred())
-		}
 		if f.FederationClientset_1_4 == nil {
 			By("Creating a release 1.4 federation Clientset")
 			var err error
@@ -203,6 +205,12 @@ func (f *Framework) BeforeEach() {
 		err := WaitForFederationApiserverReady(f.FederationClientset_1_4)
 		Expect(err).NotTo(HaveOccurred())
 		By("federation-apiserver is ready")
+
+		By("Creating a federation namespace")
+		ns, err := f.createFederationNamespace(f.BaseName)
+		Expect(err).NotTo(HaveOccurred())
+		f.FederationNamespace = ns
+		By(fmt.Sprintf("Created federation namespace %s", ns.Name))
 	}
 
 	By("Building a namespace api object")
@@ -245,6 +253,41 @@ func (f *Framework) BeforeEach() {
 	}
 }
 
+func (f *Framework) deleteFederationNs() {
+	ns := f.FederationNamespace
+	By(fmt.Sprintf("Destroying federation namespace %q for this suite.", ns.Name))
+	timeout := 5 * time.Minute
+	if f.NamespaceDeletionTimeout != 0 {
+		timeout = f.NamespaceDeletionTimeout
+	}
+
+	clientset := f.FederationClientset_1_4
+	// First delete the namespace from federation apiserver.
+	if err := clientset.Core().Namespaces().Delete(ns.Name, &api.DeleteOptions{}); err != nil {
+		Failf("Error while deleting federation namespace %s: %s", ns.Name, err)
+	}
+	// Verify that it got deleted.
+	err := wait.PollImmediate(5*time.Second, timeout, func() (bool, error) {
+		if _, err := clientset.Core().Namespaces().Get(ns.Name); err != nil {
+			if apierrs.IsNotFound(err) {
+				return true, nil
+			}
+			Logf("Error while waiting for namespace to be terminated: %v", err)
+			return false, nil
+		}
+		return false, nil
+	})
+	if err != nil {
+		if !apierrs.IsNotFound(err) {
+			Failf("Couldn't delete ns %q: %s", ns.Name, err)
+		} else {
+			Logf("Namespace %v was already deleted", ns.Name)
+		}
+	}
+
+	// TODO: Delete the namespace from underlying clusters.
+}
+
 // AfterEach deletes the namespace, after reading its events.
 func (f *Framework) AfterEach() {
 	RemoveCleanupAction(f.cleanupHandle)
@@ -252,30 +295,45 @@ func (f *Framework) AfterEach() {
 	// DeleteNamespace at the very end in defer, to avoid any
 	// expectation failures preventing deleting the namespace.
 	defer func() {
+		nsDeletionErrors := map[string]error{}
 		if TestContext.DeleteNamespace {
 			for _, ns := range f.namespacesToDelete {
 				By(fmt.Sprintf("Destroying namespace %q for this suite.", ns.Name))
-
 				timeout := 5 * time.Minute
 				if f.NamespaceDeletionTimeout != 0 {
 					timeout = f.NamespaceDeletionTimeout
 				}
-				if err := deleteNS(f.Client, ns.Name, timeout); err != nil {
+				if err := deleteNS(f.Client, f.ClientPool, ns.Name, timeout); err != nil {
 					if !apierrs.IsNotFound(err) {
-						Failf("Couldn't delete ns %q: %s", ns.Name, err)
+						nsDeletionErrors[ns.Name] = err
 					} else {
 						Logf("Namespace %v was already deleted", ns.Name)
 					}
 				}
 			}
-			f.namespacesToDelete = nil
+			// Delete the federation namespace.
+			// TODO(nikhiljindal): Uncomment this, once https://github.com/kubernetes/kubernetes/issues/31077 is fixed.
+			// In the meantime, we will have these extra namespaces in all clusters.
+			// Note: this will not cause any failure since we create a new namespace for each test in BeforeEach().
+			// f.deleteFederationNs()
 		} else {
 			Logf("Found DeleteNamespace=false, skipping namespace deletion!")
 		}
 
 		// Paranoia-- prevent reuse!
 		f.Namespace = nil
+		f.FederationNamespace = nil
 		f.Client = nil
+		f.namespacesToDelete = nil
+
+		// if we had errors deleting, report them now.
+		if len(nsDeletionErrors) != 0 {
+			messages := []string{}
+			for namespaceKey, namespaceErr := range nsDeletionErrors {
+				messages = append(messages, fmt.Sprintf("Couldn't delete ns: %q: %s (%#v)", namespaceKey, namespaceErr, namespaceErr))
+			}
+			Failf(strings.Join(messages, ","))
+		}
 	}()
 
 	if f.federated {
@@ -353,7 +411,7 @@ func (f *Framework) AfterEach() {
 	// Check whether all nodes are ready after the test.
 	// This is explicitly done at the very end of the test, to avoid
 	// e.g. not removing namespace in case of this failure.
-	if err := AllNodesReady(f.Client, time.Minute); err != nil {
+	if err := AllNodesReady(f.Client, 3*time.Minute); err != nil {
 		Failf("All nodes should be ready after test, %v", err)
 	}
 }
@@ -368,6 +426,29 @@ func (f *Framework) CreateNamespace(baseName string, labels map[string]string) (
 		f.namespacesToDelete = append(f.namespacesToDelete, ns)
 	}
 	return ns, err
+}
+
+func (f *Framework) createFederationNamespace(baseName string) (*v1.Namespace, error) {
+	clientset := f.FederationClientset_1_4
+	namespaceObj := &v1.Namespace{
+		ObjectMeta: v1.ObjectMeta{
+			GenerateName: fmt.Sprintf("e2e-tests-%v-", baseName),
+		},
+	}
+	// Be robust about making the namespace creation call.
+	var got *v1.Namespace
+	if err := wait.PollImmediate(Poll, SingleCallTimeout, func() (bool, error) {
+		var err error
+		got, err = clientset.Core().Namespaces().Create(namespaceObj)
+		if err != nil {
+			Logf("Unexpected error while creating namespace: %v", err)
+			return false, nil
+		}
+		return true, nil
+	}); err != nil {
+		return nil, err
+	}
+	return got, nil
 }
 
 // WaitForPodTerminated waits for the pod to be terminated with the given reason.

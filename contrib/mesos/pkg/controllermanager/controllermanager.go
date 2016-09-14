@@ -164,7 +164,7 @@ func (s *CMServer) Run(_ []string) error {
 	if err != nil {
 		glog.Fatalf("Failed to initialize nodecontroller: %v", err)
 	}
-	nodeController.Run(s.NodeSyncPeriod.Duration)
+	nodeController.Run()
 
 	nodeStatusUpdaterController := node.NewStatusUpdater(clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "node-status-controller")), s.NodeMonitorPeriod.Duration, time.Now)
 	if err := nodeStatusUpdaterController.Run(wait.NeverStop); err != nil {
@@ -185,7 +185,7 @@ func (s *CMServer) Run(_ []string) error {
 			glog.Warning("configure-cloud-routes is set, but cloud provider does not support routes. Will not configure cloud provider routes.")
 		} else {
 			routeController := routecontroller.New(routes, clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "route-controller")), s.ClusterName, clusterCIDR)
-			routeController.Run(s.NodeSyncPeriod.Duration)
+			routeController.Run(s.RouteReconciliationPeriod.Duration)
 			time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 		}
 	} else {
@@ -289,7 +289,7 @@ func (s *CMServer) Run(_ []string) error {
 	if err != nil {
 		glog.Fatalf("An backward-compatible provisioner could not be created: %v, but one was expected. Provisioning will not work. This functionality is considered an early Alpha version.", err)
 	}
-	volumeController := persistentvolumecontroller.NewPersistentVolumeController(
+	volumeController := persistentvolumecontroller.NewPersistentVolumeControllerFromClient(
 		clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "persistent-volume-binder")),
 		s.PVClaimBinderSyncPeriod.Duration,
 		alphaProvisioner,
@@ -302,7 +302,7 @@ func (s *CMServer) Run(_ []string) error {
 		nil, // eventRecorder
 		s.VolumeConfiguration.EnableDynamicProvisioning,
 	)
-	volumeController.Run()
+	volumeController.Run(wait.NeverStop)
 
 	var rootCA []byte
 

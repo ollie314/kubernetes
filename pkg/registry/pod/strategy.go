@@ -155,7 +155,7 @@ func (podStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object
 }
 
 // MatchPod returns a generic matcher for a given label and field selector.
-func MatchPod(label labels.Selector, field fields.Selector) generic.Matcher {
+func MatchPod(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
 	return &generic.SelectionPredicate{
 		Label: label,
 		Field: field,
@@ -191,7 +191,7 @@ func NodeNameTriggerFunc(obj runtime.Object) []storage.MatchValue {
 // PodToSelectableFields returns a field set that represents the object
 // TODO: fields are not labels, and the validation rules for them do not apply.
 func PodToSelectableFields(pod *api.Pod) fields.Set {
-	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(pod.ObjectMeta, true)
+	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(&pod.ObjectMeta, true)
 	podSpecificFieldsSet := fields.Set{
 		"spec.nodeName":      pod.Spec.NodeName,
 		"spec.restartPolicy": string(pod.Spec.RestartPolicy),

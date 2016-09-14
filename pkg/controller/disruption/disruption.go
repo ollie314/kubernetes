@@ -61,7 +61,7 @@ type DisruptionController struct {
 	rsController *framework.Controller
 	rsLister     cache.StoreToReplicaSetLister
 
-	dStore      cache.Store
+	dIndexer    cache.Indexer
 	dController *framework.Controller
 	dLister     cache.StoreToDeploymentLister
 
@@ -88,7 +88,7 @@ func NewDisruptionController(podInformer framework.SharedIndexInformer, kubeClie
 	dc := &DisruptionController{
 		kubeClient:    kubeClient,
 		podController: podInformer.GetController(),
-		queue:         workqueue.New(),
+		queue:         workqueue.NewNamed("disruption"),
 		broadcaster:   record.NewBroadcaster(),
 	}
 	dc.recorder = dc.broadcaster.NewRecorder(api.EventSource{Component: "controllermanager"})
@@ -155,7 +155,7 @@ func NewDisruptionController(podInformer framework.SharedIndexInformer, kubeClie
 
 	dc.rsLister.Store = dc.rsStore
 
-	dc.dStore, dc.dController = framework.NewInformer(
+	dc.dIndexer, dc.dController = framework.NewIndexerInformer(
 		&cache.ListWatch{
 			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
 				return dc.kubeClient.Extensions().Deployments(api.NamespaceAll).List(options)
@@ -167,9 +167,10 @@ func NewDisruptionController(podInformer framework.SharedIndexInformer, kubeClie
 		&extensions.Deployment{},
 		30*time.Second,
 		framework.ResourceEventHandlerFuncs{},
+		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 	)
 
-	dc.dLister.Store = dc.dStore
+	dc.dLister.Indexer = dc.dIndexer
 
 	return dc
 }
@@ -357,7 +358,7 @@ func (dc *DisruptionController) getPdbForPod(pod *api.Pod) *policy.PodDisruption
 	// caller.
 	pdbs, err := dc.pdbLister.GetPodPodDisruptionBudgets(pod)
 	if err != nil {
-		glog.V(0).Infof("No PodDisruptionBudgets found for pod %v, PodDisruptionBudget controller will avoid syncing.", pod.Name)
+		glog.V(4).Infof("No PodDisruptionBudgets found for pod %v, PodDisruptionBudget controller will avoid syncing.", pod.Name)
 		return nil
 	}
 
@@ -462,6 +463,10 @@ func (dc *DisruptionController) trySync(pdb *policy.PodDisruptionBudget) error {
 
 func (dc *DisruptionController) getExpectedPodCount(pdb *policy.PodDisruptionBudget, pods []*api.Pod) (expectedCount, desiredHealthy int32, err error) {
 	err = nil
+	// TODO(davidopp): consider making the way expectedCount and rules about
+	// permitted controller configurations (specifically, considering it an error
+	// if a pod covered by a PDB has 0 controllers or > 1 controller) should be
+	// handled the same way for integer and percentage minAvailable
 	if pdb.Spec.MinAvailable.Type == intstr.Int {
 		desiredHealthy = pdb.Spec.MinAvailable.IntVal
 		expectedCount = int32(len(pods))
@@ -498,9 +503,11 @@ func (dc *DisruptionController) getExpectedPodCount(pdb *policy.PodDisruptionBud
 			}
 			if controllerCount == 0 {
 				err = fmt.Errorf("asked for percentage, but found no controllers for pod %q", pod.Name)
+				dc.recorder.Event(pdb, api.EventTypeWarning, "NoControllers", err.Error())
 				return
 			} else if controllerCount > 1 {
 				err = fmt.Errorf("pod %q has %v>1 controllers", pod.Name, controllerCount)
+				dc.recorder.Event(pdb, api.EventTypeWarning, "TooManyControllers", err.Error())
 				return
 			}
 		}

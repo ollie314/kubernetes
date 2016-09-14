@@ -15,7 +15,7 @@
 # Build the etcd image
 #
 # Usage:
-# 	[TAG=2.2.1] [REGISTRY=gcr.io/google_containers] [ARCH=amd64] [BASEIMAGE=busybox] make (build|push)
+# 	[TAG=3.0.4] [REGISTRY=gcr.io/google_containers] [ARCH=amd64] [BASEIMAGE=busybox] make (build|push)
 
 TAG?=3.0.4
 ARCH?=amd64
@@ -38,8 +38,13 @@ ifeq ($(ARCH),ppc64le)
 endif
 
 build:
-	# Copy the content in this dir to the temp dir
-	cp ./* $(TEMP_DIR)
+	# Copy the content in this dir to the temp dir,
+	# without copying the subdirectories.
+	find ./ -maxdepth 1 -type f | xargs cp -t $(TEMP_DIR)
+
+	# Compile attachlease
+	docker run -it -v $(shell pwd)/../../../:/go/src/k8s.io/kubernetes -v $(TEMP_DIR):/build -e GOARCH=$(ARCH) golang:$(GOLANG_VERSION) \
+		/bin/bash -c "CGO_ENABLED=0 go build -o /build/attachlease k8s.io/kubernetes/cluster/images/etcd/attachlease"
 
 ifeq ($(ARCH),amd64)
 
@@ -53,7 +58,7 @@ else
 		&& cd /go/src/github.com/coreos/etcd \
 		&& git checkout v$(TAG) \
 		&& GOARM=$(GOARM) GOARCH=$(ARCH) ./build \
-		&& cp bin/$(ARCH)/* /etcdbin"
+		&& cp -f bin/$(ARCH)/etcd* bin/etcd* /etcdbin; echo 'done'"
 
 	# Add this ENV variable in order to workaround an unsupported arch blocker
 	# The multiarch feature is in an limited and experimental state right now, and etcd should work fine on arm64

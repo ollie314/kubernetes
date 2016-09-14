@@ -125,6 +125,25 @@ function kubectl-with-retry()
   done
 }
 
+# Waits for the pods with the given label to match the list of names. Don't call
+# this function unless you know the exact pod names, or expect no pods.
+# $1: label to match
+# $2: list of pod names sorted by name
+# Example invocation:
+# wait-for-pods-with-label "app=foo" "nginx-0nginx-1"
+function wait-for-pods-with-label()
+{
+  for i in $(seq 1 10); do
+    kubeout=`kubectl get po -l $1 --template '{{range.items}}{{.metadata.name}}{{end}}' --sort-by metadata.name "${kube_flags[@]}"`
+    if [[ $kubeout = $2 ]]; then
+        return
+    fi
+    echo Waiting for pods: $2, found $kubeout
+    sleep $i
+  done
+  kube::log::error_exit "Timeout waiting for pods with label $1"
+}
+
 kube::util::trap_add cleanup EXIT SIGINT
 kube::util::ensure-temp-dir
 
@@ -311,6 +330,7 @@ runTests() {
   hpa_min_field=".spec.minReplicas"
   hpa_max_field=".spec.maxReplicas"
   hpa_cpu_field=".spec.targetCPUUtilizationPercentage"
+  petset_replicas_field=".spec.replicas"
   job_parallelism_field=".spec.parallelism"
   deployment_replicas=".spec.replicas"
   secret_data=".data"
@@ -406,7 +426,7 @@ runTests() {
   create_and_use_new_namespace
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create "${kube_flags[@]}" -f docs/admin/limitrange/valid-pod.yaml
+  kubectl create "${kube_flags[@]}" -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml
   # Post-condition: valid-pod POD is created
   kubectl get "${kube_flags[@]}" pods -o json
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'valid-pod:'
@@ -451,7 +471,7 @@ runTests() {
 
   ### Delete POD valid-pod by id with --now
   # Pre-condition: valid-pod POD exists
-  kubectl create "${kube_flags[@]}" -f docs/admin/limitrange/valid-pod.yaml
+  kubectl create "${kube_flags[@]}" -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'valid-pod:'
   # Command
   kubectl delete pod valid-pod "${kube_flags[@]}" --now
@@ -471,7 +491,7 @@ runTests() {
   # Pre-condition: valid-pod POD exists
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'valid-pod:'
   # Command
-  kubectl delete -f docs/admin/limitrange/valid-pod.yaml "${kube_flags[@]}" --grace-period=0
+  kubectl delete -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml "${kube_flags[@]}" --grace-period=0
   # Post-condition: valid-pod POD doesn't exist
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
 
@@ -480,7 +500,7 @@ runTests() {
   create_and_use_new_namespace
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create -f docs/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
   # Post-condition: valid-pod POD is created
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'valid-pod:'
 
@@ -497,7 +517,7 @@ runTests() {
   create_and_use_new_namespace
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create -f docs/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
   # Post-condition: valid-pod POD is created
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'valid-pod:'
 
@@ -570,7 +590,7 @@ runTests() {
   create_and_use_new_namespace
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create -f docs/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
   kubectl create -f examples/storage/redis/redis-proxy.yaml "${kube_flags[@]}"
   # Post-condition: valid-pod and redis-proxy PODs are created
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'redis-proxy:valid-pod:'
@@ -588,7 +608,7 @@ runTests() {
   create_and_use_new_namespace
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create -f docs/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
   # Post-condition: valid-pod POD is created
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'valid-pod:'
 
@@ -658,7 +678,7 @@ runTests() {
   create_and_use_new_namespace
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create -f docs/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
   # Post-condition: valid-pod POD is created
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'valid-pod:'
 
@@ -687,7 +707,7 @@ runTests() {
   kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'changed-with-yaml:'
   ## Patch pod from JSON can change image
   # Command
-  kubectl patch "${kube_flags[@]}" -f docs/admin/limitrange/valid-pod.yaml -p='{"spec":{"containers":[{"name": "kubernetes-serve-hostname", "image": "gcr.io/google_containers/pause-amd64:3.0"}]}}'
+  kubectl patch "${kube_flags[@]}" -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml -p='{"spec":{"containers":[{"name": "kubernetes-serve-hostname", "image": "gcr.io/google_containers/pause-amd64:3.0"}]}}'
   # Post-condition: valid-pod POD has image gcr.io/google_containers/pause-amd64:3.0
   kube::test::get_object_assert pods "{{range.items}}{{$image_field}}:{{end}}" 'gcr.io/google_containers/pause-amd64:3.0:'
 
@@ -730,6 +750,15 @@ runTests() {
   kubectl replace "${kube_flags[@]}" --force -f /tmp/tmp-valid-pod.json
   # Post-condition: spec.container.name = "replaced-k8s-serve-hostname"
   kube::test::get_object_assert 'pod valid-pod' "{{(index .spec.containers 0).name}}" 'replaced-k8s-serve-hostname'
+
+  ## check replace --grace-period requires --force
+  output_message=$(! kubectl replace "${kube_flags[@]}" --grace-period=1 -f /tmp/tmp-valid-pod.json 2>&1)
+  kube::test::if_has_string "${output_message}" '\-\-grace-period must have \-\-force specified'
+
+  ## check replace --timeout requires --force
+  output_message=$(! kubectl replace "${kube_flags[@]}" --timeout=1s -f /tmp/tmp-valid-pod.json 2>&1)
+  kube::test::if_has_string "${output_message}" '\-\-timeout must have \-\-force specified'
+
   #cleaning
   rm /tmp/tmp-valid-pod.json
 
@@ -804,7 +833,7 @@ __EOF__
   create_and_use_new_namespace
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create -f docs/user-guide/multi-pod.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/multi-pod.yaml "${kube_flags[@]}"
   # Post-condition: valid-pod and redis-proxy PODs exist
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'redis-master:redis-proxy:'
 
@@ -812,7 +841,7 @@ __EOF__
   # Pre-condition: redis-master and redis-proxy PODs exist
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'redis-master:redis-proxy:'
   # Command
-  kubectl delete -f docs/user-guide/multi-pod.yaml "${kube_flags[@]}"
+  kubectl delete -f test/fixtures/doc-yaml/user-guide/multi-pod.yaml "${kube_flags[@]}"
   # Post-condition: no PODs exist
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
 
@@ -926,6 +955,9 @@ __EOF__
   output_message=$(kubectl get hpa.extensions -o=jsonpath='{.items[0].apiVersion}' 2>&1 "${kube_flags[@]}")
   kube::test::if_has_string "${output_message}" 'extensions/v1beta1'
   output_message=$(kubectl get hpa.autoscaling -o=jsonpath='{.items[0].apiVersion}' 2>&1 "${kube_flags[@]}")
+  kube::test::if_has_string "${output_message}" 'autoscaling/v1'
+  # tests kubectl group prefix matching
+  output_message=$(kubectl get hpa.autoscal -o=jsonpath='{.items[0].apiVersion}' 2>&1 "${kube_flags[@]}")
   kube::test::if_has_string "${output_message}" 'autoscaling/v1'
   # Clean up
   # Note that we should delete hpa first, otherwise it may fight with the rc reaper.
@@ -1396,7 +1428,7 @@ __EOF__
   # Pre-condition: no POD exists
   kube::test::get_object_assert 'pods --namespace=other' "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create "${kube_flags[@]}" --namespace=other -f docs/admin/limitrange/valid-pod.yaml
+  kubectl create "${kube_flags[@]}" --namespace=other -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml
   # Post-condition: valid-pod POD is created
   kube::test::get_object_assert 'pods --namespace=other' "{{range.items}}{{$id_field}}:{{end}}" 'valid-pod:'
   # Post-condition: verify shorthand `-n other` has the same results as `--namespace=other`
@@ -1496,7 +1528,7 @@ __EOF__
   # ConfigMap          #
   ######################
 
-  kubectl create -f docs/user-guide/configmap/configmap.yaml
+  kubectl create -f test/fixtures/doc-yaml/user-guide/configmap/configmap.yaml
   kube::test::get_object_assert configmap "{{range.items}}{{$id_field}}{{end}}" 'test-configmap'
   kubectl delete configmap test-configmap "${kube_flags[@]}"
 
@@ -1550,7 +1582,7 @@ __EOF__
   # Pre-condition: no PODTEMPLATE
   kube::test::get_object_assert podtemplates "{{range.items}}{{.metadata.name}}:{{end}}" ''
   # Command
-  kubectl create -f docs/user-guide/walkthrough/podtemplate.json "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/walkthrough/podtemplate.json "${kube_flags[@]}"
   # Post-condition: nginx PODTEMPLATE is available
   kube::test::get_object_assert podtemplates "{{range.items}}{{.metadata.name}}:{{end}}" 'nginx:'
 
@@ -1763,7 +1795,7 @@ __EOF__
   kubectl delete rc redis-{master,slave} "${kube_flags[@]}"
 
   ### Scale a job
-  kubectl create -f docs/user-guide/job.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/job.yaml "${kube_flags[@]}"
   # Command
   kubectl scale --replicas=2 job/pi
   # Post-condition: 2 replicas for pi
@@ -1772,7 +1804,7 @@ __EOF__
   kubectl delete job/pi "${kube_flags[@]}"
 
   ### Scale a deployment
-  kubectl create -f docs/user-guide/deployment.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/deployment.yaml "${kube_flags[@]}"
   # Command
   kubectl scale --current-replicas=3 --replicas=1 deployment/nginx-deployment
   # Post-condition: 1 replica for nginx-deployment
@@ -1781,7 +1813,7 @@ __EOF__
   kubectl delete deployment/nginx-deployment "${kube_flags[@]}"
 
   ### Expose a deployment as a service
-  kubectl create -f docs/user-guide/deployment.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/deployment.yaml "${kube_flags[@]}"
   # Pre-condition: 3 replicas
   kube::test::get_object_assert 'deployment nginx-deployment' "{{$deployment_replicas}}" '3'
   # Command
@@ -1804,7 +1836,7 @@ __EOF__
   # Post-condition: service exists and the port is unnamed
   kube::test::get_object_assert 'service frontend-2' "{{$port_name}} {{$port_field}}" '<no value> 443'
   # Command
-  kubectl create -f docs/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml "${kube_flags[@]}"
   kubectl expose pod valid-pod --port=444 --name=frontend-3 "${kube_flags[@]}"
   # Post-condition: service exists and the port is unnamed
   kube::test::get_object_assert 'service frontend-3' "{{$port_name}} {{$port_field}}" '<no value> 444'
@@ -1841,7 +1873,7 @@ __EOF__
 
   ### Expose multiport object as a new service
   # Pre-condition: don't use --port flag
-  output_message=$(kubectl expose -f docs/admin/high-availability/etcd.yaml --selector=test=etcd 2>&1 "${kube_flags[@]}")
+  output_message=$(kubectl expose -f test/fixtures/doc-yaml/admin/high-availability/etcd.yaml --selector=test=etcd 2>&1 "${kube_flags[@]}")
   # Post-condition: expose succeeded
   kube::test::if_has_string "${output_message}" '\"etcd-server\" exposed'
   # Post-condition: generated service has both ports from the exposed pod
@@ -1911,7 +1943,7 @@ __EOF__
   # Pre-condition: no deployment exists
   kube::test::get_object_assert deployment "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create -f docs/user-guide/deployment.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/deployment.yaml "${kube_flags[@]}"
   kube::test::get_object_assert deployment "{{range.items}}{{$id_field}}:{{end}}" 'nginx-deployment:'
   # autoscale 2~3 pods, no CPU utilization specified
   kubectl-with-retry autoscale deployment nginx-deployment "${kube_flags[@]}" --min=2 --max=3
@@ -1934,6 +1966,9 @@ __EOF__
   kube::test::get_object_assert deployment "{{range.items}}{{$deployment_image_field}}:{{end}}" "${IMAGE_DEPLOYMENT_R1}:"
   # Update the deployment (revision 2)
   kubectl apply -f hack/testdata/deployment-revision2.yaml "${kube_flags[@]}"
+  kube::test::get_object_assert deployment.extensions "{{range.items}}{{$deployment_image_field}}:{{end}}" "${IMAGE_DEPLOYMENT_R2}:"
+  # Rollback to revision 1 with dry-run - should be no-op
+  kubectl rollout undo deployment nginx --to-revision=1 --dry-run=true "${kube_flags[@]}"
   kube::test::get_object_assert deployment.extensions "{{range.items}}{{$deployment_image_field}}:{{end}}" "${IMAGE_DEPLOYMENT_R2}:"
   # Rollback to revision 1
   kubectl rollout undo deployment nginx --to-revision=1 "${kube_flags[@]}"
@@ -2098,6 +2133,37 @@ __EOF__
   ! kubectl autoscale rs frontend "${kube_flags[@]}"
   # Clean up
   kubectl delete rs frontend "${kube_flags[@]}"
+
+
+
+  ############
+  # Pet Sets #
+  ############
+
+  kube::log::status "Testing kubectl(${version}:petsets)"
+
+  ### Create and stop petset, make sure it doesn't leak pods
+  # Pre-condition: no petset exists
+  kube::test::get_object_assert petset "{{range.items}}{{$id_field}}:{{end}}" ''
+  # Command: create petset
+  kubectl create -f hack/testdata/nginx-petset.yaml "${kube_flags[@]}"
+
+  ### Scale petset test with current-replicas and replicas
+  # Pre-condition: 0 replicas
+  kube::test::get_object_assert 'petset nginx' "{{$petset_replicas_field}}" '0'
+  # Command: Scale up
+  kubectl scale --current-replicas=0 --replicas=1 petset nginx "${kube_flags[@]}"
+  # Post-condition: 1 replica, named nginx-0
+  kube::test::get_object_assert 'petset nginx' "{{$petset_replicas_field}}" '1'
+  # Typically we'd wait and confirm that N>1 replicas are up, but this framework
+  # doesn't start  the scheduler, so pet-0 will block all others.
+  # TODO: test robust scaling in an e2e.
+  wait-for-pods-with-label "app=nginx-petset" "nginx-0"
+
+  ### Clean up
+  kubectl delete -f hack/testdata/nginx-petset.yaml "${kube_flags[@]}"
+  # Post-condition: no pods from petset controller
+  wait-for-pods-with-label "app=nginx-petset" ""
 
 
   ######################
@@ -2292,13 +2358,13 @@ __EOF__
   # Pre-condition: no persistent volumes currently exist
   kube::test::get_object_assert pv "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create -f docs/user-guide/persistent-volumes/volumes/local-01.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/persistent-volumes/volumes/local-01.yaml "${kube_flags[@]}"
   kube::test::get_object_assert pv "{{range.items}}{{$id_field}}:{{end}}" 'pv0001:'
   kubectl delete pv pv0001 "${kube_flags[@]}"
-  kubectl create -f docs/user-guide/persistent-volumes/volumes/local-02.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/persistent-volumes/volumes/local-02.yaml "${kube_flags[@]}"
   kube::test::get_object_assert pv "{{range.items}}{{$id_field}}:{{end}}" 'pv0002:'
   kubectl delete pv pv0002 "${kube_flags[@]}"
-  kubectl create -f docs/user-guide/persistent-volumes/volumes/gce.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/persistent-volumes/volumes/gce.yaml "${kube_flags[@]}"
   kube::test::get_object_assert pv "{{range.items}}{{$id_field}}:{{end}}" 'pv0003:'
   kubectl delete pv pv0003 "${kube_flags[@]}"
   # Post-condition: no PVs
@@ -2312,15 +2378,15 @@ __EOF__
   # Pre-condition: no persistent volume claims currently exist
   kube::test::get_object_assert pvc "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create -f docs/user-guide/persistent-volumes/claims/claim-01.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/persistent-volumes/claims/claim-01.yaml "${kube_flags[@]}"
   kube::test::get_object_assert pvc "{{range.items}}{{$id_field}}:{{end}}" 'myclaim-1:'
   kubectl delete pvc myclaim-1 "${kube_flags[@]}"
 
-  kubectl create -f docs/user-guide/persistent-volumes/claims/claim-02.yaml "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/persistent-volumes/claims/claim-02.yaml "${kube_flags[@]}"
   kube::test::get_object_assert pvc "{{range.items}}{{$id_field}}:{{end}}" 'myclaim-2:'
   kubectl delete pvc myclaim-2 "${kube_flags[@]}"
 
-  kubectl create -f docs/user-guide/persistent-volumes/claims/claim-03.json "${kube_flags[@]}"
+  kubectl create -f test/fixtures/doc-yaml/user-guide/persistent-volumes/claims/claim-03.json "${kube_flags[@]}"
   kube::test::get_object_assert pvc "{{range.items}}{{$id_field}}:{{end}}" 'myclaim-3:'
   kubectl delete pvc myclaim-3 "${kube_flags[@]}"
   # Post-condition: no PVCs
@@ -2337,7 +2403,7 @@ __EOF__
   kubectl create -f - "${kube_flags[@]}" << __EOF__
 {
   "kind": "StorageClass",
-  "apiVersion": "extensions/v1beta1",
+  "apiVersion": "storage.k8s.io/v1beta1",
   "metadata": {
     "name": "storage-class-name"
   },
@@ -2410,7 +2476,7 @@ __EOF__
     exit 1
   fi
   rm "${SAR_RESULT_FILE}"
- 
+
 
   #####################
   # Retrieve multiple #
@@ -2484,7 +2550,7 @@ __EOF__
   # Pre-condition: no POD exists
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
   # Command
-  kubectl create "${kube_flags[@]}" -f docs/admin/limitrange/valid-pod.yaml
+  kubectl create "${kube_flags[@]}" -f test/fixtures/doc-yaml/admin/limitrange/valid-pod.yaml
   # Post-condition: valid-pod is created
   kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" 'valid-pod:'
 

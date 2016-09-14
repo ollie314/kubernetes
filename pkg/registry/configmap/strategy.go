@@ -84,11 +84,11 @@ func (strategy) ValidateUpdate(ctx api.Context, newObj, oldObj runtime.Object) f
 
 // ConfigMapToSelectableFields returns a field set that represents the object for matching purposes.
 func ConfigMapToSelectableFields(cfg *api.ConfigMap) fields.Set {
-	return generic.ObjectMetaFieldsSet(cfg.ObjectMeta, true)
+	return generic.ObjectMetaFieldsSet(&cfg.ObjectMeta, true)
 }
 
 // MatchConfigMap returns a generic matcher for a given label and field selector.
-func MatchConfigMap(label labels.Selector, field fields.Selector) generic.Matcher {
+func MatchConfigMap(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
 	return &generic.SelectionPredicate{
 		Label: label,
 		Field: field,

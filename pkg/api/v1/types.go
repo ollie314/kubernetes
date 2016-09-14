@@ -186,6 +186,11 @@ type ObjectMeta struct {
 	// from the list. If the deletionTimestamp of the object is non-nil, entries
 	// in this list can only be removed.
 	Finalizers []string `json:"finalizers,omitempty" patchStrategy:"merge" protobuf:"bytes,14,rep,name=finalizers"`
+
+	// The name of the cluster which the object belongs to.
+	// This is used to distinguish resources with same name and namespace in different clusters.
+	// This field is not set anywhere right now and apiserver is going to ignore it if set in create or update request.
+	ClusterName string `json:"clusterName,omitempty" protobuf:"bytes,15,opt,name=clusterName"`
 }
 
 const (
@@ -253,7 +258,7 @@ type VolumeSource struct {
 	// More info: http://releases.k8s.io/HEAD/examples/volumes/rbd/README.md
 	RBD *RBDVolumeSource `json:"rbd,omitempty" protobuf:"bytes,11,opt,name=rbd"`
 	// FlexVolume represents a generic volume resource that is
-	// provisioned/attached using a exec based plugin. This is an
+	// provisioned/attached using an exec based plugin. This is an
 	// alpha feature and may change in future.
 	FlexVolume *FlexVolumeSource `json:"flexVolume,omitempty" protobuf:"bytes,12,opt,name=flexVolume"`
 	// Cinder represents a cinder volume attached and mounted on kubelets host machine
@@ -275,6 +280,8 @@ type VolumeSource struct {
 	VsphereVolume *VsphereVirtualDiskVolumeSource `json:"vsphereVolume,omitempty" protobuf:"bytes,20,opt,name=vsphereVolume"`
 	// Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
 	Quobyte *QuobyteVolumeSource `json:"quobyte,omitempty" protobuf:"bytes,21,opt,name=quobyte"`
+	// AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.
+	AzureDisk *AzureDiskVolumeSource `json:"azureDisk,omitempty" protobuf:"bytes,22,opt,name=azureDisk"`
 }
 
 // PersistentVolumeClaimVolumeSource references the user's PVC in the same namespace.
@@ -330,7 +337,7 @@ type PersistentVolumeSource struct {
 	// Flocker represents a Flocker volume attached to a kubelet's host machine and exposed to the pod for its usage. This depends on the Flocker control service being running
 	Flocker *FlockerVolumeSource `json:"flocker,omitempty" protobuf:"bytes,11,opt,name=flocker"`
 	// FlexVolume represents a generic volume resource that is
-	// provisioned/attached using a exec based plugin. This is an
+	// provisioned/attached using an exec based plugin. This is an
 	// alpha feature and may change in future.
 	FlexVolume *FlexVolumeSource `json:"flexVolume,omitempty" protobuf:"bytes,12,opt,name=flexVolume"`
 	// AzureFile represents an Azure File Service mount on the host and bind mount to the pod.
@@ -339,6 +346,8 @@ type PersistentVolumeSource struct {
 	VsphereVolume *VsphereVirtualDiskVolumeSource `json:"vsphereVolume,omitempty" protobuf:"bytes,14,opt,name=vsphereVolume"`
 	// Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
 	Quobyte *QuobyteVolumeSource `json:"quobyte,omitempty" protobuf:"bytes,15,opt,name=quobyte"`
+	// AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.
+	AzureDisk *AzureDiskVolumeSource `json:"azureDisk,omitempty" protobuf:"bytes,16,opt,name=azureDisk"`
 }
 
 // +genclient=true
@@ -382,7 +391,7 @@ type PersistentVolumeSpec struct {
 	ClaimRef *ObjectReference `json:"claimRef,omitempty" protobuf:"bytes,4,opt,name=claimRef"`
 	// What happens to a persistent volume when released from its claim.
 	// Valid options are Retain (default) and Recycle.
-	// Recyling must be supported by the volume plugin underlying this persistent volume.
+	// Recycling must be supported by the volume plugin underlying this persistent volume.
 	// More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#recycling-policy
 	PersistentVolumeReclaimPolicy PersistentVolumeReclaimPolicy `json:"persistentVolumeReclaimPolicy,omitempty" protobuf:"bytes,5,opt,name=persistentVolumeReclaimPolicy,casttype=PersistentVolumeReclaimPolicy"`
 }
@@ -424,6 +433,8 @@ type PersistentVolumeList struct {
 	// More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md
 	Items []PersistentVolume `json:"items" protobuf:"bytes,2,rep,name=items"`
 }
+
+// +genclient=true
 
 // PersistentVolumeClaim is a user's request for and claim to a persistent volume
 type PersistentVolumeClaim struct {
@@ -714,7 +725,7 @@ type QuobyteVolumeSource struct {
 }
 
 // FlexVolume represents a generic volume resource that is
-// provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.
+// provisioned/attached using an exec based plugin. This is an alpha feature and may change in future.
 type FlexVolumeSource struct {
 	// Driver is the name of the driver to use for this volume.
 	Driver string `json:"driver" protobuf:"bytes,1,opt,name=driver"`
@@ -852,7 +863,7 @@ type ISCSIVolumeSource struct {
 // Fibre Channel volumes can only be mounted as read/write once.
 // Fibre Channel volumes support ownership management and SELinux relabeling.
 type FCVolumeSource struct {
-	// Required: FC target world wide names (WWNs)
+	// Required: FC target worldwide names (WWNs)
 	TargetWWNs []string `json:"targetWWNs" protobuf:"bytes,1,rep,name=targetWWNs"`
 	// Required: FC target lun number
 	Lun *int32 `json:"lun" protobuf:"varint,2,opt,name=lun"`
@@ -885,6 +896,30 @@ type VsphereVirtualDiskVolumeSource struct {
 	// Must be a filesystem type supported by the host operating system.
 	// Ex. "ext4", "xfs", "ntfs". Implicitly inferred to be "ext4" if unspecified.
 	FSType string `json:"fsType,omitempty" protobuf:"bytes,2,opt,name=fsType"`
+}
+type AzureDataDiskCachingMode string
+
+const (
+	AzureDataDiskCachingNone      AzureDataDiskCachingMode = "None"
+	AzureDataDiskCachingReadOnly  AzureDataDiskCachingMode = "ReadOnly"
+	AzureDataDiskCachingReadWrite AzureDataDiskCachingMode = "ReadWrite"
+)
+
+// AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.
+type AzureDiskVolumeSource struct {
+	// The Name of the data disk in the blob storage
+	DiskName string `json:"diskName" protobuf:"bytes,1,opt,name=diskName"`
+	// The URI the data disk in the blob storage
+	DataDiskURI string `json:"diskURI" protobuf:"bytes,2,opt,name=diskURI"`
+	// Host Caching mode: None, Read Only, Read Write.
+	CachingMode *AzureDataDiskCachingMode `json:"cachingMode,omitempty" protobuf:"bytes,3,opt,name=cachingMode,casttype=AzureDataDiskCachingMode"`
+	// Filesystem type to mount.
+	// Must be a filesystem type supported by the host operating system.
+	// Ex. "ext4", "xfs", "ntfs". Implicitly inferred to be "ext4" if unspecified.
+	FSType *string `json:"fsType,omitempty" protobuf:"bytes,4,opt,name=fsType"`
+	// Defaults to false (read/write). ReadOnly here will force
+	// the ReadOnly setting in VolumeMounts.
+	ReadOnly *bool `json:"readOnly,omitempty" protobuf:"varint,5,opt,name=readOnly"`
 }
 
 // Adapts a ConfigMap into a volume.
@@ -990,7 +1025,8 @@ type EnvVar struct {
 
 // EnvVarSource represents a source for the value of an EnvVar.
 type EnvVarSource struct {
-	// Selects a field of the pod; only name and namespace are supported.
+	// Selects a field of the pod: supports metadata.name, metadata.namespace, metadata.labels, metadata.annotations,
+	// spec.nodeName, spec.serviceAccountName, status.podIP.
 	FieldRef *ObjectFieldSelector `json:"fieldRef,omitempty" protobuf:"bytes,1,opt,name=fieldRef"`
 	// Selects a resource of the container: only resources limits and requests
 	// (limits.cpu, limits.memory, requests.cpu and requests.memory) are currently supported.
@@ -1704,11 +1740,17 @@ const (
 const (
 	// This annotation key will be used to contain an array of v1 JSON encoded Containers
 	// for init containers. The annotation will be placed into the internal type and cleared.
+	// This key is only recognized by version >= 1.4.
+	PodInitContainersBetaAnnotationKey = "pod.beta.kubernetes.io/init-containers"
+	// This annotation key will be used to contain an array of v1 JSON encoded Containers
+	// for init containers. The annotation will be placed into the internal type and cleared.
+	// This key is recognized by version >= 1.3. For version 1.4 code, this key
+	// will have its value copied to the beta key.
 	PodInitContainersAnnotationKey = "pod.alpha.kubernetes.io/init-containers"
 	// This annotation key will be used to contain an array of v1 JSON encoded
 	// ContainerStatuses for init containers. The annotation will be placed into the internal
 	// type and cleared.
-	PodInitContainerStatusesAnnotationKey = "pod.alpha.kubernetes.io/init-container-statuses"
+	PodInitContainerStatusesAnnotationKey = "pod.beta.kubernetes.io/init-container-statuses"
 )
 
 // PodSpec is a description of a pod.
@@ -1999,6 +2041,9 @@ type ReplicationControllerStatus struct {
 
 	// The number of pods that have labels matching the labels of the pod template of the replication controller.
 	FullyLabeledReplicas int32 `json:"fullyLabeledReplicas,omitempty" protobuf:"varint,2,opt,name=fullyLabeledReplicas"`
+
+	// The number of ready replicas for this replication controller.
+	ReadyReplicas int32 `json:"readyReplicas,omitempty" protobuf:"varint,4,opt,name=readyReplicas"`
 
 	// ObservedGeneration reflects the generation of the most recently observed replication controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty" protobuf:"varint,3,opt,name=observedGeneration"`
@@ -2553,7 +2598,7 @@ const (
 	NodeNetworkUnavailable NodeConditionType = "NetworkUnavailable"
 )
 
-// NodeCondition contains condition infromation for a node.
+// NodeCondition contains condition information for a node.
 type NodeCondition struct {
 	// Type of node condition.
 	Type NodeConditionType `json:"type" protobuf:"bytes,1,opt,name=type,casttype=NodeConditionType"`

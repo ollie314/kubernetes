@@ -33,12 +33,9 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/client/restclient"
-	"k8s.io/kubernetes/pkg/client/typed/dynamic"
-	namespacecontroller "k8s.io/kubernetes/pkg/controller/namespace"
-	"k8s.io/kubernetes/pkg/util/wait"
 	commontest "k8s.io/kubernetes/test/e2e/common"
 	"k8s.io/kubernetes/test/e2e/framework"
+	"k8s.io/kubernetes/test/e2e_node/services"
 
 	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo"
@@ -48,7 +45,7 @@ import (
 	"github.com/spf13/pflag"
 )
 
-var e2es *E2EServices
+var e2es *services.E2EServices
 
 var prePullImages = flag.Bool("prepull-images", true, "If true, prepull images so image pull failures do not cause test failures.")
 var runServicesMode = flag.Bool("run-services-mode", false, "If true, only run services (etcd, apiserver) in current process, and not run test.")
@@ -65,7 +62,7 @@ func TestE2eNode(t *testing.T) {
 	pflag.Parse()
 	if *runServicesMode {
 		// If run-services-mode is specified, only run services in current process.
-		RunE2EServices()
+		services.RunE2EServices()
 		return
 	}
 	// If run-services-mode is not specified, run test.
@@ -89,16 +86,10 @@ func TestE2eNode(t *testing.T) {
 
 // Setup the kubelet on the node
 var _ = SynchronizedBeforeSuite(func() []byte {
-	if *buildServices {
-		Expect(buildGo()).To(Succeed())
-	}
-
 	// Initialize node name here, so that the following code can get right node name.
 	if framework.TestContext.NodeName == "" {
 		hostname, err := os.Hostname()
-		if err != nil {
-			glog.Fatalf("Could not get node name: %v", err)
-		}
+		Expect(err).NotTo(HaveOccurred(), "should be able to get node name")
 		framework.TestContext.NodeName = hostname
 	}
 	// Pre-pull the images tests depend on so we can fail immediately if there is an image pull issue
@@ -115,33 +106,27 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	maskLocksmithdOnCoreos()
 
 	if *startServices {
-		e2es = NewE2EServices()
-		if err := e2es.Start(); err != nil {
-			glog.Fatalf("Unable to start node services: %v", err)
-		}
+		e2es = services.NewE2EServices()
+		Expect(e2es.Start()).To(Succeed(), "should be able to start node services.")
 		glog.Infof("Node services started.  Running tests...")
 	} else {
 		glog.Infof("Running tests without starting services.")
 	}
 
-	glog.Infof("Starting namespace controller")
-	// TODO(random-liu): Move namespace controller into namespace services.
-	startNamespaceController()
+	glog.Infof("Wait for the node to be ready")
+	waitForNodeReady()
 
 	// Reference common test to make the import valid.
 	commontest.CurrentSuite = commontest.NodeE2E
 
 	data, err := json.Marshal(&framework.TestContext.NodeTestContextType)
-	if err != nil {
-		glog.Fatalf("Failed to serialize node test context: %v", err)
-	}
+	Expect(err).NotTo(HaveOccurred(), "should be able to serialize node test context.")
+
 	return data
 }, func(data []byte) {
 	// The node test context is updated in the first function, update it on every test node.
 	err := json.Unmarshal(data, &framework.TestContext.NodeTestContextType)
-	if err != nil {
-		glog.Fatalf("Failed to deserialize node test context: %v", err)
-	}
+	Expect(err).NotTo(HaveOccurred(), "should be able to deserialize node test context.")
 })
 
 // Tear down the kubelet on the node
@@ -164,28 +149,37 @@ func maskLocksmithdOnCoreos() {
 		return
 	}
 	if bytes.Contains(data, []byte("ID=coreos")) {
-		if output, err := exec.Command("sudo", "systemctl", "mask", "--now", "locksmithd").CombinedOutput(); err != nil {
-			glog.Fatalf("Could not mask locksmithd: %v, output: %q", err, string(output))
-		}
+		output, err := exec.Command("sudo", "systemctl", "mask", "--now", "locksmithd").CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("should be able to mask locksmithd - output: %q", string(output)))
 		glog.Infof("Locksmithd is masked successfully")
 	}
 }
 
-const (
-	// ncResyncPeriod is resync period of the namespace controller
-	ncResyncPeriod = 5 * time.Minute
-	// ncConcurrency is concurrency of the namespace controller
-	ncConcurrency = 2
-)
-
-func startNamespaceController() {
-	// Use the default QPS
-	config := restclient.AddUserAgent(&restclient.Config{Host: framework.TestContext.Host}, "node-e2e-namespace-controller")
+func waitForNodeReady() {
+	const (
+		// nodeReadyTimeout is the time to wait for node to become ready.
+		nodeReadyTimeout = 2 * time.Minute
+		// nodeReadyPollInterval is the interval to check node ready.
+		nodeReadyPollInterval = 1 * time.Second
+	)
+	config, err := framework.LoadConfig()
+	Expect(err).NotTo(HaveOccurred())
 	client, err := clientset.NewForConfig(config)
 	Expect(err).NotTo(HaveOccurred())
-	clientPool := dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
-	resources, err := client.Discovery().ServerPreferredNamespacedResources()
-	Expect(err).NotTo(HaveOccurred())
-	nc := namespacecontroller.NewNamespaceController(client, clientPool, resources, ncResyncPeriod, api.FinalizerKubernetes)
-	go nc.Run(ncConcurrency, wait.NeverStop)
+	Eventually(func() error {
+		nodes, err := client.Nodes().List(api.ListOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		if nodes == nil {
+			return fmt.Errorf("the node list is nil.")
+		}
+		Expect(len(nodes.Items) > 1).NotTo(BeTrue())
+		if len(nodes.Items) == 0 {
+			return fmt.Errorf("empty node list: %+v", nodes)
+		}
+		node := nodes.Items[0]
+		if !api.IsNodeReady(&node) {
+			return fmt.Errorf("node is not ready: %+v", node)
+		}
+		return nil
+	}, nodeReadyTimeout, nodeReadyPollInterval).Should(Succeed())
 }

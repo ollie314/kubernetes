@@ -119,11 +119,15 @@ check test: generated_files
 
 # Build and run integration tests.
 #
+# Args:
+#   WHAT: Directory names to test.  All *_test.go files under these
+#     directories will be run.  If not specified, "everything" will be tested.
+#
 # Example:
 #   make test-integration
 .PHONY: test-integration
 test-integration: generated_files
-	hack/make-rules/test-integration.sh
+	hack/make-rules/test-integration.sh $(WHAT)
 
 # Build and run end-to-end tests.
 #
@@ -202,13 +206,14 @@ clean: clean_meta
 clean_meta:
 	rm -rf $(META_DIR)
 
-# Remove all auto-generated artifacts.
+# Remove all auto-generated artifacts. Generated artifacts in staging folder should not be removed as they are not
+# generated using generated_files.
 #
 # Example:
 #   make clean_generated
 .PHONY: clean_generated
 clean_generated:
-	find . -type f -name $(GENERATED_FILE_PREFIX)\* | xargs rm -f
+	find . -type f -name $(GENERATED_FILE_PREFIX)\* | grep -v "[.]/staging/.*" | xargs rm -f
 
 # Run 'go vet'.
 #
@@ -278,4 +283,4 @@ $(notdir $(abspath $(wildcard federation/cmd/*/))): generated_files
 #   make generated_files
 .PHONY: generated_files
 generated_files:
-	$(MAKE) -f Makefile.$@ $@
+	$(MAKE) -f Makefile.$@ $@ CALLED_FROM_MAIN_MAKEFILE=1

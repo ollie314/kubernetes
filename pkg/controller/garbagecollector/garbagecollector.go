@@ -45,7 +45,7 @@ import (
 	"k8s.io/kubernetes/pkg/watch"
 )
 
-const ResourceResyncTime = 60 * time.Second
+const ResourceResyncTime time.Duration = 0
 
 type monitor struct {
 	store      cache.Store
@@ -443,6 +443,8 @@ type GarbageCollector struct {
 	clock                            clock.Clock
 	registeredRateLimiter            *RegisteredRateLimiter
 	registeredRateLimiterForMonitors *RegisteredRateLimiter
+	// GC caches the owners that do not exist according to the API server.
+	absentOwnerCache *UIDCache
 }
 
 func gcListWatcher(client *dynamic.Client, resource unversioned.GroupVersionResource) *cache.ListWatch {
@@ -502,7 +504,6 @@ func (gc *GarbageCollector) monitorFor(resource unversioned.GroupVersionResource
 			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
 				setObjectTypeMeta(newObj)
-				setObjectTypeMeta(oldObj)
 				event := &event{updateEvent, newObj, oldObj}
 				gc.propagator.eventQueue.Add(&workqueue.TimedWorkQueueItem{StartTime: gc.clock.Now(), Object: event})
 			},
@@ -524,12 +525,14 @@ func (gc *GarbageCollector) monitorFor(resource unversioned.GroupVersionResource
 }
 
 var ignoredResources = map[unversioned.GroupVersionResource]struct{}{
-	unversioned.GroupVersionResource{Group: "extensions", Version: "v1beta1", Resource: "replicationcontrollers"}:         {},
-	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "bindings"}:                                      {},
-	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "componentstatuses"}:                             {},
-	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "events"}:                                        {},
-	unversioned.GroupVersionResource{Group: "authentication.k8s.io", Version: "v1beta1", Resource: "tokenreviews"}:        {},
-	unversioned.GroupVersionResource{Group: "authorization.k8s.io", Version: "v1beta1", Resource: "subjectaccessreviews"}: {},
+	unversioned.GroupVersionResource{Group: "extensions", Version: "v1beta1", Resource: "replicationcontrollers"}:              {},
+	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "bindings"}:                                           {},
+	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "componentstatuses"}:                                  {},
+	unversioned.GroupVersionResource{Group: "", Version: "v1", Resource: "events"}:                                             {},
+	unversioned.GroupVersionResource{Group: "authentication.k8s.io", Version: "v1beta1", Resource: "tokenreviews"}:             {},
+	unversioned.GroupVersionResource{Group: "authorization.k8s.io", Version: "v1beta1", Resource: "subjectaccessreviews"}:      {},
+	unversioned.GroupVersionResource{Group: "authorization.k8s.io", Version: "v1beta1", Resource: "selfsubjectaccessreviews"}:  {},
+	unversioned.GroupVersionResource{Group: "authorization.k8s.io", Version: "v1beta1", Resource: "localsubjectaccessreviews"}: {},
 }
 
 func NewGarbageCollector(metaOnlyClientPool dynamic.ClientPool, clientPool dynamic.ClientPool, resources []unversioned.GroupVersionResource) (*GarbageCollector, error) {
@@ -541,8 +544,9 @@ func NewGarbageCollector(metaOnlyClientPool dynamic.ClientPool, clientPool dynam
 		clock:                            clock.RealClock{},
 		dirtyQueue:                       workqueue.NewTimedWorkQueue(),
 		orphanQueue:                      workqueue.NewTimedWorkQueue(),
-		registeredRateLimiter:            NewRegisteredRateLimiter(),
-		registeredRateLimiterForMonitors: NewRegisteredRateLimiter(),
+		registeredRateLimiter:            NewRegisteredRateLimiter(resources),
+		registeredRateLimiterForMonitors: NewRegisteredRateLimiter(resources),
+		absentOwnerCache:                 NewUIDCache(100),
 	}
 	gc.propagator = &Propagator{
 		eventQueue: workqueue.NewTimedWorkQueue(),
@@ -579,6 +583,9 @@ func (gc *GarbageCollector) worker() {
 	err := gc.processItem(timedItem.Object.(*node))
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("Error syncing item %#v: %v", timedItem.Object, err))
+		// retry if garbage collection of an object failed.
+		gc.dirtyQueue.Add(timedItem)
+		return
 	}
 	DirtyProcessingLatency.Observe(sinceInMicroseconds(gc.clock, timedItem.StartTime))
 }
@@ -708,6 +715,10 @@ func (gc *GarbageCollector) processItem(item *node) error {
 	// TODO: we need to remove dangling references if the object is not to be
 	// deleted.
 	for _, reference := range ownerReferences {
+		if gc.absentOwnerCache.Has(reference.UID) {
+			glog.V(6).Infof("according to the absentOwnerCache, object %s's owner %s/%s, %s does not exist", item.identity.UID, reference.APIVersion, reference.Kind, reference.Name)
+			continue
+		}
 		// TODO: we need to verify the reference resource is supported by the
 		// system. If it's not a valid resource, the garbage collector should i)
 		// ignore the reference when decide if the object should be deleted, and
@@ -727,11 +738,13 @@ func (gc *GarbageCollector) processItem(item *node) error {
 		if err == nil {
 			if owner.GetUID() != reference.UID {
 				glog.V(6).Infof("object %s's owner %s/%s, %s is not found, UID mismatch", item.identity.UID, reference.APIVersion, reference.Kind, reference.Name)
+				gc.absentOwnerCache.Add(reference.UID)
 				continue
 			}
 			glog.V(6).Infof("object %s has at least an existing owner, will not garbage collect", item.identity.UID)
 			return nil
 		} else if errors.IsNotFound(err) {
+			gc.absentOwnerCache.Add(reference.UID)
 			glog.V(6).Infof("object %s's owner %s/%s, %s is not found", item.identity.UID, reference.APIVersion, reference.Kind, reference.Name)
 		} else {
 			return err

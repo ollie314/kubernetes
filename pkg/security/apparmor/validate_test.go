@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -37,7 +36,7 @@ func TestGetAppArmorFS(t *testing.T) {
 	assert.Equal(t, expectedPath, actualPath)
 }
 
-func TestAdmitHost(t *testing.T) {
+func TestValidateHost(t *testing.T) {
 	// This test only passes on systems running AppArmor with the default configuration.
 	// The test should be manually run if modifying the getAppArmorFS function.
 	t.Skip()
@@ -46,7 +45,7 @@ func TestAdmitHost(t *testing.T) {
 	assert.Error(t, validateHost("rkt"))
 }
 
-func TestAdmitProfile(t *testing.T) {
+func TestValidateProfile(t *testing.T) {
 	loadedProfiles := map[string]bool{
 		"docker-default":                                true,
 		"foo-bar":                                       true,
@@ -61,12 +60,12 @@ func TestAdmitProfile(t *testing.T) {
 		expectValid bool
 	}{
 		{"", true},
-		{"runtime/default", true},
+		{ProfileRuntimeDefault, true},
 		{"baz", false}, // Missing local prefix.
-		{"localhost//usr/sbin/ntpd", true},
-		{"localhost/foo-bar", true},
-		{"localhost/unloaded", false}, // Not loaded.
-		{"localhost/", false},
+		{ProfileNamePrefix + "/usr/sbin/ntpd", true},
+		{ProfileNamePrefix + "foo-bar", true},
+		{ProfileNamePrefix + "unloaded", false}, // Not loaded.
+		{ProfileNamePrefix + "", false},
 	}
 
 	for _, test := range tests {
@@ -79,7 +78,7 @@ func TestAdmitProfile(t *testing.T) {
 	}
 }
 
-func TestAdmitBadHost(t *testing.T) {
+func TestValidateBadHost(t *testing.T) {
 	hostErr := errors.New("expected host error")
 	v := &validator{
 		validateHostErr: hostErr,
@@ -90,25 +89,21 @@ func TestAdmitBadHost(t *testing.T) {
 		expectValid bool
 	}{
 		{"", true},
-		{"runtime/default", false},
-		{"localhost/docker-default", false},
+		{ProfileRuntimeDefault, false},
+		{ProfileNamePrefix + "docker-default", false},
 	}
 
 	for _, test := range tests {
-		result := v.Admit(&lifecycle.PodAdmitAttributes{
-			Pod: getPodWithProfile(test.profile),
-		})
+		err := v.Validate(getPodWithProfile(test.profile))
 		if test.expectValid {
-			assert.True(t, result.Admit, "Pod with profile %q should be admitted", test.profile)
+			assert.NoError(t, err, "Pod with profile %q should be valid", test.profile)
 		} else {
-			assert.False(t, result.Admit, "Pod with profile %q should be rejected", test.profile)
-			assert.Equal(t, rejectReason, result.Reason, "Pod with profile %q", test.profile)
-			assert.Contains(t, result.Message, hostErr.Error(), "Pod with profile %q", test.profile)
+			assert.Equal(t, hostErr, err, "Pod with profile %q should trigger a host validation error", test.profile)
 		}
 	}
 }
 
-func TestAdmitValidHost(t *testing.T) {
+func TestValidateValidHost(t *testing.T) {
 	v := &validator{
 		appArmorFS: "./testdata/",
 	}
@@ -118,25 +113,21 @@ func TestAdmitValidHost(t *testing.T) {
 		expectValid bool
 	}{
 		{"", true},
-		{"runtime/default", true},
-		{"localhost/docker-default", true},
-		{"localhost/foo-container", true},
-		{"localhost//usr/sbin/ntpd", true},
+		{ProfileRuntimeDefault, true},
+		{ProfileNamePrefix + "docker-default", true},
+		{ProfileNamePrefix + "foo-container", true},
+		{ProfileNamePrefix + "/usr/sbin/ntpd", true},
 		{"docker-default", false},
-		{"localhost/foo", false},
-		{"localhost/", false},
+		{ProfileNamePrefix + "foo", false},
+		{ProfileNamePrefix + "", false},
 	}
 
 	for _, test := range tests {
-		result := v.Admit(&lifecycle.PodAdmitAttributes{
-			Pod: getPodWithProfile(test.profile),
-		})
+		err := v.Validate(getPodWithProfile(test.profile))
 		if test.expectValid {
-			assert.True(t, result.Admit, "Pod with profile %q should be admitted", test.profile)
+			assert.NoError(t, err, "Pod with profile %q should be valid", test.profile)
 		} else {
-			assert.False(t, result.Admit, "Pod with profile %q should be rejected", test.profile)
-			assert.Equal(t, rejectReason, result.Reason, "Pod with profile %q", test.profile)
-			assert.NotEmpty(t, result.Message, "Pod with profile %q", test.profile)
+			assert.Error(t, err, "Pod with profile %q should trigger a validation error", test.profile)
 		}
 	}
 
@@ -144,9 +135,9 @@ func TestAdmitValidHost(t *testing.T) {
 	pod := &api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Annotations: map[string]string{
-				"container.apparmor.security.alpha.kubernetes.io/init":  "localhost/foo-container",
-				"container.apparmor.security.alpha.kubernetes.io/test1": "runtime/default",
-				"container.apparmor.security.alpha.kubernetes.io/test2": "localhost/docker-default",
+				ContainerAnnotationKeyPrefix + "init":  ProfileNamePrefix + "foo-container",
+				ContainerAnnotationKeyPrefix + "test1": ProfileRuntimeDefault,
+				ContainerAnnotationKeyPrefix + "test2": ProfileNamePrefix + "docker-default",
 			},
 		},
 		Spec: api.PodSpec{
@@ -160,16 +151,10 @@ func TestAdmitValidHost(t *testing.T) {
 			},
 		},
 	}
-	assert.True(t, v.Admit(&lifecycle.PodAdmitAttributes{Pod: pod}).Admit,
-		"Multi-container pod should be admitted")
+	assert.NoError(t, v.Validate(pod), "Multi-container pod should validate")
 	for k, val := range pod.Annotations {
 		pod.Annotations[k] = val + "-bad"
-
-		result := v.Admit(&lifecycle.PodAdmitAttributes{Pod: pod})
-		assert.False(t, result.Admit, "Multi-container pod with invalid profile should be rejected")
-		assert.Equal(t, rejectReason, result.Reason, "Multi-container pod with invalid profile")
-		assert.NotEmpty(t, result.Message, "Multi-container pod with invalid profile")
-
+		assert.Error(t, v.Validate(pod), "Multi-container pod with invalid profile %s:%s", k, pod.Annotations[k])
 		pod.Annotations[k] = val // Restore.
 	}
 }
@@ -188,7 +173,7 @@ func TestParseProfileName(t *testing.T) {
 
 func getPodWithProfile(profile string) *api.Pod {
 	annotations := map[string]string{
-		"container.apparmor.security.alpha.kubernetes.io/test": profile,
+		ContainerAnnotationKeyPrefix + "test": profile,
 	}
 	if profile == "" {
 		annotations = map[string]string{

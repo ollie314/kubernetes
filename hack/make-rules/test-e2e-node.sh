@@ -29,34 +29,8 @@ parallelism=${PARALLELISM:-8}
 report=${REPORT:-"/tmp/"}
 artifacts=${ARTIFACTS:-"/tmp/_artifacts"}
 remote=${REMOTE:-"false"}
-images=${IMAGES:-""}
-hosts=${HOSTS:-""}
-metadata=${INSTANCE_METADATA:-""}
-gubernator=${GUBERNATOR:-"false"}
-gci_image=$(gcloud compute images list --project google-containers \
-    --no-standard-images --regexp="gci-dev.*" --format="table[no-heading](name)")
-if [[ $hosts == "" && $images == "" ]]; then
-  images=$gci_image
-  metadata="user-data<${KUBE_ROOT}/test/e2e_node/jenkins/gci-init.yaml"
-fi
-image_project=${IMAGE_PROJECT:-"google-containers"}
-instance_prefix=${INSTANCE_PREFIX:-"test"}
-cleanup=${CLEANUP:-"true"}
-delete_instances=${DELETE_INSTANCES:-"false"}
 run_until_failure=${RUN_UNTIL_FAILURE:-"false"}
-list_images=${LIST_IMAGES:-"false"}
 test_args=${TEST_ARGS:-""}
-
-if  [[ $list_images == "true" ]]; then
-  gcloud compute images list --project="${image_project}" | grep "e2e-node"
-  exit 0
-fi
-
-ginkgo=$(kube::util::find-binary "ginkgo")
-if [[ -z "${ginkgo}" ]]; then
-  echo "You do not appear to have ginkgo built. Try 'make WHAT=vendor/github.com/onsi/ginkgo/ginkgo'"
-  exit 1
-fi
 
 # Parse the flags to pass to ginkgo
 ginkgoflags=""
@@ -78,6 +52,28 @@ fi
 
 
 if [ $remote = true ] ; then
+  # The following options are only valid in remote run.
+  images=${IMAGES:-""}
+  hosts=${HOSTS:-""}
+  image_project=${IMAGE_PROJECT:-"kubernetes-node-e2e-images"}
+  metadata=${INSTANCE_METADATA:-""}
+  list_images=${LIST_IMAGES:-false}
+  if  [[ $list_images == "true" ]]; then
+    gcloud compute images list --project="${image_project}" | grep "e2e-node"
+    exit 0
+  fi
+  gubernator=${GUBERNATOR:-"false"}
+  if [[ $hosts == "" && $images == "" ]]; then
+    image_project=${IMAGE_PROJECT:-"google-containers"}
+    gci_image=$(gcloud compute images list --project $image_project \
+    --no-standard-images --regexp="gci-dev.*" --format="table[no-heading](name)")
+    images=$gci_image
+    metadata="user-data<${KUBE_ROOT}/test/e2e_node/jenkins/gci-init.yaml"
+  fi
+  instance_prefix=${INSTANCE_PREFIX:-"test"}
+  cleanup=${CLEANUP:-"true"}
+  delete_instances=${DELETE_INSTANCES:-"false"}
+
   # Setup the directory to copy test artifacts (logs, junit.xml, etc) from remote host to local host
   if [[ $gubernator = true && -d "${artifacts}" ]]; then
     echo "Removing artifacts directory at ${artifacts}"
@@ -135,7 +131,7 @@ if [ $remote = true ] ; then
   echo "Ginkgo Flags: $ginkgoflags"
   echo "Instance Metadata: $metadata"
   # Invoke the runner
-  go run test/e2e_node/runner/run_e2e.go  --logtostderr --vmodule=*=2 --ssh-env="gce" \
+  go run test/e2e_node/runner/remote/run_remote.go  --logtostderr --vmodule=*=4 --ssh-env="gce" \
     --zone="$zone" --project="$project" --gubernator="$gubernator" \
     --hosts="$hosts" --images="$images" --cleanup="$cleanup" \
     --results-dir="$artifacts" --ginkgo-flags="$ginkgoflags" \
@@ -171,8 +167,8 @@ else
 
   # Test using the host the script was run on
   # Provided for backwards compatibility
-  "${ginkgo}" $ginkgoflags "${KUBE_ROOT}/test/e2e_node/" --report-dir=${report} \
-    -- --alsologtostderr --v 2 --node-name $(hostname) --build-services=true \
-    --start-services=true --stop-services=true $test_args
+  go run test/e2e_node/runner/local/run_local.go --ginkgo-flags="$ginkgoflags" \
+    --test-flags="--alsologtostderr --v 4 --report-dir=${report} --node-name $(hostname) \
+    $test_args" --build-dependencies=true
   exit $?
 fi

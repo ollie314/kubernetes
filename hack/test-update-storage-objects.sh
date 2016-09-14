@@ -100,6 +100,7 @@ function cleanup() {
 trap cleanup EXIT SIGINT
 
 make -C "${KUBE_ROOT}" WHAT=cmd/kube-apiserver
+make -C "${KUBE_ROOT}" WHAT=cluster/images/etcd/attachlease
 
 kube::etcd::start
 
@@ -107,8 +108,8 @@ kube::etcd::start
 
 # source_file,resource,namespace,name,old_version,new_version
 tests=(
-docs/user-guide/job.yaml,jobs,default,pi,extensions/v1beta1,batch/v1
-docs/user-guide/horizontal-pod-autoscaling/hpa-php-apache.yaml,horizontalpodautoscalers,default,php-apache,extensions/v1beta1,autoscaling/v1
+test/fixtures/doc-yaml/user-guide/job.yaml,jobs,default,pi,extensions/v1beta1,batch/v1
+test/fixtures/doc-yaml/user-guide/horizontal-pod-autoscaling/hpa-php-apache.yaml,horizontalpodautoscalers,default,php-apache,extensions/v1beta1,autoscaling/v1
 )
 
 # need to include extensions/v1beta1 in new api version because its internal types are used by jobs
@@ -156,12 +157,15 @@ killApiServer
 # We always perform offline migration, so we need to stop etcd.
 #######################################################
 
-kube::etcd::stop
-TARGET_STORAGE="etcd3" \
-  DATA_DIRECTORY="${ETCD_DIR}" \
-  ETCDCTL=$(which etcdctl) \
-  ${KUBE_ROOT}/cluster/images/etcd/migrate-if-needed.sh
-kube::etcd::start
+# TODO: Uncomment once we support migration.
+#kube::etcd::stop
+#TARGET_STORAGE="etcd3" \
+#  DATA_DIRECTORY="${ETCD_DIR}" \
+#  ETCD=$(which etcd) \
+#  ETCDCTL=$(which etcdctl) \
+#  ATTACHLEASE="${KUBE_OUTPUT_HOSTBIN}/attachlease" \
+#  ${KUBE_ROOT}/cluster/images/etcd/migrate-if-needed.sh
+#kube::etcd::start
 
 
 #######################################################
@@ -172,7 +176,8 @@ kube::etcd::start
 
 KUBE_API_VERSIONS="${KUBE_NEW_API_VERSION},${KUBE_OLD_API_VERSION}"
 RUNTIME_CONFIG="api/all=false,api/${KUBE_OLD_API_VERSION}=true,api/${KUBE_NEW_API_VERSION}=true"
-startApiServer ${STORAGE_BACKEND_ETCD3} ${KUBE_NEW_STORAGE_VERSIONS} ${KUBE_STORAGE_MEDIA_TYPE_JSON}
+# TODO: Switch to STORAGE_BACKEND_ETCD3 once we support it.
+startApiServer ${STORAGE_BACKEND_ETCD2} ${KUBE_NEW_STORAGE_VERSIONS} ${KUBE_STORAGE_MEDIA_TYPE_JSON}
 
 # Update etcd objects, so that will now be stored in the new api version.
 kube::log::status "Updating storage versions in etcd"
@@ -187,7 +192,8 @@ for test in ${tests[@]}; do
   new_storage_version=${test_data[5]}
 
   kube::log::status "Verifying ${resource}/${namespace}/${name} has updated storage version ${new_storage_version} in etcd"
-  ETCDCTL_API=3 ${ETCDCTL} --endpoints="${ETCD_HOST}:${ETCD_PORT}" get "/${ETCD_PREFIX}/${resource}/${namespace}/${name}" | grep ${new_storage_version}
+  # note that should use flag --endpoints for etcdctl 3
+  ${ETCDCTL} --endpoint="${ETCD_HOST}:${ETCD_PORT}" get "/${ETCD_PREFIX}/${resource}/${namespace}/${name}" | grep ${new_storage_version}
 done
 
 killApiServer
@@ -203,7 +209,8 @@ RUNTIME_CONFIG="api/all=false,api/${KUBE_NEW_API_VERSION}=true"
 
 # This seems to reduce flakiness.
 sleep 1
-startApiServer ${STORAGE_BACKEND_ETCD3} ${KUBE_NEW_STORAGE_VERSIONS} ${KUBE_STORAGE_MEDIA_TYPE_PROTOBUF}
+# TODO: Switch to STORAGE_BACKEND_ETCD3 once we support it.
+startApiServer ${STORAGE_BACKEND_ETCD2} ${KUBE_NEW_STORAGE_VERSIONS} ${KUBE_STORAGE_MEDIA_TYPE_PROTOBUF}
 
 for test in ${tests[@]}; do
   IFS=',' read -ra test_data <<<"$test"

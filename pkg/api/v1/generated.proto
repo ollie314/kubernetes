@@ -89,6 +89,27 @@ message AvoidPods {
   repeated PreferAvoidPodsEntry preferAvoidPods = 1;
 }
 
+// AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.
+message AzureDiskVolumeSource {
+  // The Name of the data disk in the blob storage
+  optional string diskName = 1;
+
+  // The URI the data disk in the blob storage
+  optional string diskURI = 2;
+
+  // Host Caching mode: None, Read Only, Read Write.
+  optional string cachingMode = 3;
+
+  // Filesystem type to mount.
+  // Must be a filesystem type supported by the host operating system.
+  // Ex. "ext4", "xfs", "ntfs". Implicitly inferred to be "ext4" if unspecified.
+  optional string fsType = 4;
+
+  // Defaults to false (read/write). ReadOnly here will force
+  // the ReadOnly setting in VolumeMounts.
+  optional bool readOnly = 5;
+}
+
 // AzureFile represents an Azure File Service mount on the host and bind mount to the pod.
 message AzureFileVolumeSource {
   // the name of secret that contains Azure Storage Account Name and Key
@@ -683,7 +704,8 @@ message EnvVar {
 
 // EnvVarSource represents a source for the value of an EnvVar.
 message EnvVarSource {
-  // Selects a field of the pod; only name and namespace are supported.
+  // Selects a field of the pod: supports metadata.name, metadata.namespace, metadata.labels, metadata.annotations,
+  // spec.nodeName, spec.serviceAccountName, status.podIP.
   optional ObjectFieldSelector fieldRef = 1;
 
   // Selects a resource of the container: only resources limits and requests
@@ -774,7 +796,7 @@ message ExportOptions {
 // Fibre Channel volumes can only be mounted as read/write once.
 // Fibre Channel volumes support ownership management and SELinux relabeling.
 message FCVolumeSource {
-  // Required: FC target world wide names (WWNs)
+  // Required: FC target worldwide names (WWNs)
   repeated string targetWWNs = 1;
 
   // Required: FC target lun number
@@ -792,7 +814,7 @@ message FCVolumeSource {
 }
 
 // FlexVolume represents a generic volume resource that is
-// provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.
+// provisioned/attached using an exec based plugin. This is an alpha feature and may change in future.
 message FlexVolumeSource {
   // Driver is the name of the driver to use for this volume.
   optional string driver = 1;
@@ -1226,7 +1248,7 @@ message NodeAffinity {
   repeated PreferredSchedulingTerm preferredDuringSchedulingIgnoredDuringExecution = 2;
 }
 
-// NodeCondition contains condition infromation for a node.
+// NodeCondition contains condition information for a node.
 message NodeCondition {
   // Type of node condition.
   optional string type = 1;
@@ -1524,6 +1546,11 @@ message ObjectMeta {
   // from the list. If the deletionTimestamp of the object is non-nil, entries
   // in this list can only be removed.
   repeated string finalizers = 14;
+
+  // The name of the cluster which the object belongs to.
+  // This is used to distinguish resources with same name and namespace in different clusters.
+  // This field is not set anywhere right now and apiserver is going to ignore it if set in create or update request.
+  optional string clusterName = 15;
 }
 
 // ObjectReference contains enough information to let you inspect or modify the referred object.
@@ -1739,7 +1766,7 @@ message PersistentVolumeSource {
   optional FlockerVolumeSource flocker = 11;
 
   // FlexVolume represents a generic volume resource that is
-  // provisioned/attached using a exec based plugin. This is an
+  // provisioned/attached using an exec based plugin. This is an
   // alpha feature and may change in future.
   optional FlexVolumeSource flexVolume = 12;
 
@@ -1751,6 +1778,9 @@ message PersistentVolumeSource {
 
   // Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
   optional QuobyteVolumeSource quobyte = 15;
+
+  // AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.
+  optional AzureDiskVolumeSource azureDisk = 16;
 }
 
 // PersistentVolumeSpec is the specification of a persistent volume.
@@ -1774,7 +1804,7 @@ message PersistentVolumeSpec {
 
   // What happens to a persistent volume when released from its claim.
   // Valid options are Retain (default) and Recycle.
-  // Recyling must be supported by the volume plugin underlying this persistent volume.
+  // Recycling must be supported by the volume plugin underlying this persistent volume.
   // More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#recycling-policy
   optional string persistentVolumeReclaimPolicy = 5;
 }
@@ -2463,6 +2493,9 @@ message ReplicationControllerStatus {
   // The number of pods that have labels matching the labels of the pod template of the replication controller.
   optional int32 fullyLabeledReplicas = 2;
 
+  // The number of ready replicas for this replication controller.
+  optional int32 readyReplicas = 4;
+
   // ObservedGeneration reflects the generation of the most recently observed replication controller.
   optional int64 observedGeneration = 3;
 }
@@ -2996,7 +3029,7 @@ message VolumeSource {
   optional RBDVolumeSource rbd = 11;
 
   // FlexVolume represents a generic volume resource that is
-  // provisioned/attached using a exec based plugin. This is an
+  // provisioned/attached using an exec based plugin. This is an
   // alpha feature and may change in future.
   optional FlexVolumeSource flexVolume = 12;
 
@@ -3027,6 +3060,9 @@ message VolumeSource {
 
   // Quobyte represents a Quobyte mount on the host that shares a pod's lifetime
   optional QuobyteVolumeSource quobyte = 21;
+
+  // AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.
+  optional AzureDiskVolumeSource azureDisk = 22;
 }
 
 // Represents a vSphere volume resource.

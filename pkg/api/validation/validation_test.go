@@ -29,6 +29,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/capabilities"
+	"k8s.io/kubernetes/pkg/security/apparmor"
 	"k8s.io/kubernetes/pkg/util/intstr"
 	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/util/validation/field"
@@ -244,6 +245,45 @@ func TestValidateObjectMetaUpdateIgnoresCreationTimestamp(t *testing.T) {
 		field.NewPath("field"),
 	); len(errs) != 0 {
 		t.Fatalf("unexpected errors: %v", errs)
+	}
+}
+
+func TestValidateFinalizersUpdate(t *testing.T) {
+	testcases := map[string]struct {
+		Old         api.ObjectMeta
+		New         api.ObjectMeta
+		ExpectedErr string
+	}{
+		"invalid adding finalizers": {
+			Old:         api.ObjectMeta{Name: "test", ResourceVersion: "1", DeletionTimestamp: &unversioned.Time{}, Finalizers: []string{"x/a"}},
+			New:         api.ObjectMeta{Name: "test", ResourceVersion: "1", DeletionTimestamp: &unversioned.Time{}, Finalizers: []string{"x/a", "y/b"}},
+			ExpectedErr: "y/b",
+		},
+		"invalid changing finalizers": {
+			Old:         api.ObjectMeta{Name: "test", ResourceVersion: "1", DeletionTimestamp: &unversioned.Time{}, Finalizers: []string{"x/a"}},
+			New:         api.ObjectMeta{Name: "test", ResourceVersion: "1", DeletionTimestamp: &unversioned.Time{}, Finalizers: []string{"x/b"}},
+			ExpectedErr: "x/b",
+		},
+		"valid removing finalizers": {
+			Old:         api.ObjectMeta{Name: "test", ResourceVersion: "1", DeletionTimestamp: &unversioned.Time{}, Finalizers: []string{"x/a", "y/b"}},
+			New:         api.ObjectMeta{Name: "test", ResourceVersion: "1", DeletionTimestamp: &unversioned.Time{}, Finalizers: []string{"x/a"}},
+			ExpectedErr: "",
+		},
+		"valid adding finalizers for objects not being deleted": {
+			Old:         api.ObjectMeta{Name: "test", ResourceVersion: "1", Finalizers: []string{"x/a"}},
+			New:         api.ObjectMeta{Name: "test", ResourceVersion: "1", Finalizers: []string{"x/a", "y/b"}},
+			ExpectedErr: "",
+		},
+	}
+	for name, tc := range testcases {
+		errs := ValidateObjectMetaUpdate(&tc.New, &tc.Old, field.NewPath("field"))
+		if len(errs) == 0 {
+			if len(tc.ExpectedErr) != 0 {
+				t.Errorf("case: %q, expected error to contain %q", name, tc.ExpectedErr)
+			}
+		} else if e, a := tc.ExpectedErr, errs.ToAggregate().Error(); !strings.Contains(a, e) {
+			t.Errorf("case: %q, expected error to contain %q, got error %q", name, e, a)
+		}
 	}
 }
 
@@ -546,6 +586,32 @@ func TestValidatePersistentVolumes(t *testing.T) {
 					HostPath:          &api.HostPathVolumeSource{Path: "/foo"},
 					GCEPersistentDisk: &api.GCEPersistentDiskVolumeSource{PDName: "foo", FSType: "ext4"},
 				},
+			}),
+		},
+		"host mount of / with recycle reclaim policy": {
+			isExpectedFailure: true,
+			volume: testVolume("bad-recycle-do-not-want", "", api.PersistentVolumeSpec{
+				Capacity: api.ResourceList{
+					api.ResourceName(api.ResourceStorage): resource.MustParse("10G"),
+				},
+				AccessModes: []api.PersistentVolumeAccessMode{api.ReadWriteOnce},
+				PersistentVolumeSource: api.PersistentVolumeSource{
+					HostPath: &api.HostPathVolumeSource{Path: "/"},
+				},
+				PersistentVolumeReclaimPolicy: api.PersistentVolumeReclaimRecycle,
+			}),
+		},
+		"host mount of / with recycle reclaim policy 2": {
+			isExpectedFailure: true,
+			volume: testVolume("bad-recycle-do-not-want", "", api.PersistentVolumeSpec{
+				Capacity: api.ResourceList{
+					api.ResourceName(api.ResourceStorage): resource.MustParse("10G"),
+				},
+				AccessModes: []api.PersistentVolumeAccessMode{api.ReadWriteOnce},
+				PersistentVolumeSource: api.PersistentVolumeSource{
+					HostPath: &api.HostPathVolumeSource{Path: "/a/.."},
+				},
+				PersistentVolumeReclaimPolicy: api.PersistentVolumeReclaimRecycle,
 			}),
 		},
 	}
@@ -2062,6 +2128,47 @@ func TestValidateVolumes(t *testing.T) {
 			errtype:  field.ErrorTypeRequired,
 			errfield: "quobyte.volume",
 		},
+		// AzureDisk
+		{
+			name: "valid AzureDisk",
+			vol: api.Volume{
+				Name: "azure-disk",
+				VolumeSource: api.VolumeSource{
+					AzureDisk: &api.AzureDiskVolumeSource{
+						DiskName:    "foo",
+						DataDiskURI: "https://blob/vhds/bar.vhd",
+					},
+				},
+			},
+		},
+		{
+			name: "AzureDisk empty disk name",
+			vol: api.Volume{
+				Name: "azure-disk",
+				VolumeSource: api.VolumeSource{
+					AzureDisk: &api.AzureDiskVolumeSource{
+						DiskName:    "",
+						DataDiskURI: "https://blob/vhds/bar.vhd",
+					},
+				},
+			},
+			errtype:  field.ErrorTypeRequired,
+			errfield: "azureDisk.diskName",
+		},
+		{
+			name: "AzureDisk empty disk uri",
+			vol: api.Volume{
+				Name: "azure-disk",
+				VolumeSource: api.VolumeSource{
+					AzureDisk: &api.AzureDiskVolumeSource{
+						DiskName:    "foo",
+						DataDiskURI: "",
+					},
+				},
+			},
+			errtype:  field.ErrorTypeRequired,
+			errfield: "azureDisk.diskURI",
+		},
 	}
 
 	for i, tc := range testCases {
@@ -2211,6 +2318,24 @@ func TestValidateEnv(t *testing.T) {
 				FieldRef: &api.ObjectFieldSelector{
 					APIVersion: testapi.Default.GroupVersion().String(),
 					FieldPath:  "metadata.name",
+				},
+			},
+		},
+		{
+			Name: "abc",
+			ValueFrom: &api.EnvVarSource{
+				FieldRef: &api.ObjectFieldSelector{
+					APIVersion: testapi.Default.GroupVersion().String(),
+					FieldPath:  "spec.nodeName",
+				},
+			},
+		},
+		{
+			Name: "abc",
+			ValueFrom: &api.EnvVarSource{
+				FieldRef: &api.ObjectFieldSelector{
+					APIVersion: testapi.Default.GroupVersion().String(),
+					FieldPath:  "spec.serviceAccountName",
 				},
 			},
 		},
@@ -2381,7 +2506,7 @@ func TestValidateEnv(t *testing.T) {
 					},
 				},
 			}},
-			expectedError: `[0].valueFrom.fieldRef.fieldPath: Unsupported value: "metadata.labels": supported values: metadata.name, metadata.namespace, status.podIP`,
+			expectedError: `[0].valueFrom.fieldRef.fieldPath: Unsupported value: "metadata.labels": supported values: metadata.name, metadata.namespace, spec.nodeName, spec.serviceAccountName, status.podIP`,
 		},
 		{
 			name: "invalid fieldPath annotations",
@@ -2394,7 +2519,7 @@ func TestValidateEnv(t *testing.T) {
 					},
 				},
 			}},
-			expectedError: `[0].valueFrom.fieldRef.fieldPath: Unsupported value: "metadata.annotations": supported values: metadata.name, metadata.namespace, status.podIP`,
+			expectedError: `[0].valueFrom.fieldRef.fieldPath: Unsupported value: "metadata.annotations": supported values: metadata.name, metadata.namespace, spec.nodeName, spec.serviceAccountName, status.podIP`,
 		},
 		{
 			name: "unsupported fieldPath",
@@ -2407,7 +2532,7 @@ func TestValidateEnv(t *testing.T) {
 					},
 				},
 			}},
-			expectedError: `valueFrom.fieldRef.fieldPath: Unsupported value: "status.phase": supported values: metadata.name, metadata.namespace, status.podIP`,
+			expectedError: `valueFrom.fieldRef.fieldPath: Unsupported value: "status.phase": supported values: metadata.name, metadata.namespace, spec.nodeName, spec.serviceAccountName, status.podIP`,
 		},
 	}
 	for _, tc := range errorCases {
@@ -3168,6 +3293,11 @@ func TestValidatePodSpec(t *testing.T) {
 }
 
 func TestValidatePod(t *testing.T) {
+	validPodSpec := api.PodSpec{
+		Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
+		RestartPolicy: api.RestartPolicyAlways,
+		DNSPolicy:     api.DNSClusterFirst,
+	}
 	successCases := []api.Pod{
 		{ // Basic fields.
 			ObjectMeta: api.ObjectMeta{Name: "123", Namespace: "ns"},
@@ -3287,11 +3417,7 @@ func TestValidatePod(t *testing.T) {
 					}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		{ // Serialized pod anti affinity with different Label Operators in affinity requirements in annotations.
 			ObjectMeta: api.ObjectMeta{
@@ -3339,11 +3465,7 @@ func TestValidatePod(t *testing.T) {
 					}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		{ // populate tolerations equal operator in annotations.
 			ObjectMeta: api.ObjectMeta{
@@ -3359,11 +3481,7 @@ func TestValidatePod(t *testing.T) {
 					}]`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		{ // populate tolerations exists operator in annotations.
 			ObjectMeta: api.ObjectMeta{
@@ -3378,11 +3496,7 @@ func TestValidatePod(t *testing.T) {
 					}]`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		{ // empty operator is ok for toleration
 			ObjectMeta: api.ObjectMeta{
@@ -3397,11 +3511,7 @@ func TestValidatePod(t *testing.T) {
 					}]`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		{ // empty efffect is ok for toleration
 			ObjectMeta: api.ObjectMeta{
@@ -3416,11 +3526,7 @@ func TestValidatePod(t *testing.T) {
 					}]`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		{ // docker default seccomp profile
 			ObjectMeta: api.ObjectMeta{
@@ -3430,11 +3536,7 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompPodAnnotationKey: "docker/default",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		{ // unconfined seccomp profile
 			ObjectMeta: api.ObjectMeta{
@@ -3444,11 +3546,7 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompPodAnnotationKey: "unconfined",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		{ // localhost seccomp profile
 			ObjectMeta: api.ObjectMeta{
@@ -3458,11 +3556,7 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompPodAnnotationKey: "localhost/foo",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		{ // localhost seccomp profile for a container
 			ObjectMeta: api.ObjectMeta{
@@ -3472,11 +3566,53 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompContainerAnnotationKeyPrefix + "foo": "localhost/foo",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
+			Spec: validPodSpec,
+		},
+		{ // default AppArmor profile for a container
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					apparmor.ContainerAnnotationKeyPrefix + "ctr": apparmor.ProfileRuntimeDefault,
+				},
 			},
+			Spec: validPodSpec,
+		},
+		{ // default AppArmor profile for an init container
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					apparmor.ContainerAnnotationKeyPrefix + "init-ctr": apparmor.ProfileRuntimeDefault,
+				},
+			},
+			Spec: api.PodSpec{
+				InitContainers: []api.Container{{Name: "init-ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
+				Containers:     []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
+				RestartPolicy:  api.RestartPolicyAlways,
+				DNSPolicy:      api.DNSClusterFirst,
+			},
+		},
+		{ // localhost AppArmor profile for a container
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					apparmor.ContainerAnnotationKeyPrefix + "ctr": apparmor.ProfileNamePrefix + "foo",
+				},
+			},
+			Spec: validPodSpec,
+		},
+		{ // syntactically valid sysctls
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					api.SysctlsPodAnnotationKey:       "kernel.shmmni=32768,kernel.shmmax=1000000000",
+					api.UnsafeSysctlsPodAnnotationKey: "knet.ipv4.route.min_pmtu=1000",
+				},
+			},
+			Spec: validPodSpec,
 		},
 	}
 	for _, pod := range successCases {
@@ -3534,11 +3670,7 @@ func TestValidatePod(t *testing.T) {
 					`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid node selector requirement in node affinity in pod annotations, operator can't be null": {
 			ObjectMeta: api.ObjectMeta{
@@ -3555,11 +3687,7 @@ func TestValidatePod(t *testing.T) {
 					}}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid preferredSchedulingTerm in node affinity in pod annotations, weight should be in range 1-100": {
 			ObjectMeta: api.ObjectMeta{
@@ -3581,11 +3709,7 @@ func TestValidatePod(t *testing.T) {
 					]}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid requiredDuringSchedulingIgnoredDuringExecution node selector, nodeSelectorTerms must have at least one term": {
 			ObjectMeta: api.ObjectMeta{
@@ -3600,11 +3724,7 @@ func TestValidatePod(t *testing.T) {
 					}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid requiredDuringSchedulingIgnoredDuringExecution node selector term, matchExpressions must have at least one node selector requirement": {
 			ObjectMeta: api.ObjectMeta{
@@ -3621,11 +3741,7 @@ func TestValidatePod(t *testing.T) {
 					}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid weight in preferredDuringSchedulingIgnoredDuringExecution in pod affinity annotations, weight should be in range 1-100": {
 			ObjectMeta: api.ObjectMeta{
@@ -3650,11 +3766,7 @@ func TestValidatePod(t *testing.T) {
 					}]}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid labelSelector in preferredDuringSchedulingIgnoredDuringExecution in podaffinity annotations, values should be empty if the operator is Exists": {
 			ObjectMeta: api.ObjectMeta{
@@ -3679,11 +3791,7 @@ func TestValidatePod(t *testing.T) {
 					}]}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid name space in preferredDuringSchedulingIgnoredDuringExecution in podaffinity annotations, name space shouldbe valid": {
 			ObjectMeta: api.ObjectMeta{
@@ -3708,11 +3816,7 @@ func TestValidatePod(t *testing.T) {
 					}]}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid labelOperator in preferredDuringSchedulingIgnoredDuringExecution in podantiaffinity annotations, labelOperator should be proper": {
 			ObjectMeta: api.ObjectMeta{
@@ -3737,11 +3841,7 @@ func TestValidatePod(t *testing.T) {
 					}]}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid pod affinity, empty topologyKey is not allowed for hard pod affinity": {
 			ObjectMeta: api.ObjectMeta{
@@ -3766,11 +3866,7 @@ func TestValidatePod(t *testing.T) {
 					}]}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid pod anti-affinity, empty topologyKey is not allowed for hard pod anti-affinity": {
 			ObjectMeta: api.ObjectMeta{
@@ -3795,11 +3891,7 @@ func TestValidatePod(t *testing.T) {
 					}]}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid pod anti-affinity, empty topologyKey is not allowed for soft pod affinity": {
 			ObjectMeta: api.ObjectMeta{
@@ -3824,11 +3916,7 @@ func TestValidatePod(t *testing.T) {
 					}]}}`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid toleration key": {
 			ObjectMeta: api.ObjectMeta{
@@ -3844,11 +3932,7 @@ func TestValidatePod(t *testing.T) {
 					}]`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"invalid toleration operator": {
 			ObjectMeta: api.ObjectMeta{
@@ -3864,11 +3948,7 @@ func TestValidatePod(t *testing.T) {
 					}]`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"value must be empty when `operator` is 'Exists'": {
 			ObjectMeta: api.ObjectMeta{
@@ -3884,11 +3964,7 @@ func TestValidatePod(t *testing.T) {
 					}]`,
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"must be a valid pod seccomp profile": {
 			ObjectMeta: api.ObjectMeta{
@@ -3898,11 +3974,7 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompPodAnnotationKey: "foo",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"must be a valid container seccomp profile": {
 			ObjectMeta: api.ObjectMeta{
@@ -3912,11 +3984,7 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompContainerAnnotationKeyPrefix + "foo": "foo",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"must be a non-empty container name in seccomp annotation": {
 			ObjectMeta: api.ObjectMeta{
@@ -3926,11 +3994,7 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompContainerAnnotationKeyPrefix: "foo",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"must be a non-empty container profile in seccomp annotation": {
 			ObjectMeta: api.ObjectMeta{
@@ -3940,11 +4004,7 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompContainerAnnotationKeyPrefix + "foo": "",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"must be a relative path in a node-local seccomp profile annotation": {
 			ObjectMeta: api.ObjectMeta{
@@ -3954,11 +4014,7 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompPodAnnotationKey: "localhost//foo",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
-			},
+			Spec: validPodSpec,
 		},
 		"must not start with '../'": {
 			ObjectMeta: api.ObjectMeta{
@@ -3968,11 +4024,85 @@ func TestValidatePod(t *testing.T) {
 					api.SeccompPodAnnotationKey: "localhost/../foo",
 				},
 			},
-			Spec: api.PodSpec{
-				Containers:    []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
-				RestartPolicy: api.RestartPolicyAlways,
-				DNSPolicy:     api.DNSClusterFirst,
+			Spec: validPodSpec,
+		},
+		"AppArmor profile must apply to a container": {
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					apparmor.ContainerAnnotationKeyPrefix + "ctr":      apparmor.ProfileRuntimeDefault,
+					apparmor.ContainerAnnotationKeyPrefix + "init-ctr": apparmor.ProfileRuntimeDefault,
+					apparmor.ContainerAnnotationKeyPrefix + "fake-ctr": apparmor.ProfileRuntimeDefault,
+				},
 			},
+			Spec: api.PodSpec{
+				InitContainers: []api.Container{{Name: "init-ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
+				Containers:     []api.Container{{Name: "ctr", Image: "image", ImagePullPolicy: "IfNotPresent"}},
+				RestartPolicy:  api.RestartPolicyAlways,
+				DNSPolicy:      api.DNSClusterFirst,
+			},
+		},
+		"AppArmor profile format must be valid": {
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					apparmor.ContainerAnnotationKeyPrefix + "ctr": "bad-name",
+				},
+			},
+			Spec: validPodSpec,
+		},
+		"only default AppArmor profile may start with runtime/": {
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					apparmor.ContainerAnnotationKeyPrefix + "ctr": "runtime/foo",
+				},
+			},
+			Spec: validPodSpec,
+		},
+		"invalid sysctl annotation": {
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					api.SysctlsPodAnnotationKey: "foo:",
+				},
+			},
+			Spec: validPodSpec,
+		},
+		"invalid comma-separated sysctl annotation": {
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					api.SysctlsPodAnnotationKey: "kernel.msgmax,",
+				},
+			},
+			Spec: validPodSpec,
+		},
+		"invalid unsafe sysctl annotation": {
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					api.SysctlsPodAnnotationKey: "foo:",
+				},
+			},
+			Spec: validPodSpec,
+		},
+		"intersecting safe sysctls and unsafe sysctls annotations": {
+			ObjectMeta: api.ObjectMeta{
+				Name:      "123",
+				Namespace: "ns",
+				Annotations: map[string]string{
+					api.SysctlsPodAnnotationKey:       "kernel.shmmax=10000000",
+					api.UnsafeSysctlsPodAnnotationKey: "kernel.shmmax=10000000",
+				},
+			},
+			Spec: validPodSpec,
 		},
 	}
 	for k, v := range errorCases {
@@ -7811,5 +7941,140 @@ func TestValidateHasLabel(t *testing.T) {
 	}
 	if errs := ValidateHasLabel(wrongValueCase, field.NewPath("field"), "foo", "bar"); len(errs) == 0 {
 		t.Errorf("expected failure")
+	}
+}
+
+func TestIsValidSysctlName(t *testing.T) {
+	valid := []string{
+		"a.b.c.d",
+		"a",
+		"a_b",
+		"a-b",
+		"abc",
+		"abc.def",
+	}
+	invalid := []string{
+		"",
+		"*",
+		"ä",
+		"a_",
+		"_",
+		"__",
+		"_a",
+		"_a._b",
+		"-",
+		".",
+		"a.",
+		".a",
+		"a.b.",
+		"a*.b",
+		"a*b",
+		"*a",
+		"a.*",
+		"*",
+		"abc*",
+		"a.abc*",
+		"a.b.*",
+		"Abc",
+		func(n int) string {
+			x := make([]byte, n)
+			for i := range x {
+				x[i] = byte('a')
+			}
+			return string(x)
+		}(256),
+	}
+	for _, s := range valid {
+		if !IsValidSysctlName(s) {
+			t.Errorf("%q expected to be a valid sysctl name", s)
+		}
+	}
+	for _, s := range invalid {
+		if IsValidSysctlName(s) {
+			t.Errorf("%q expected to be an invalid sysctl name", s)
+		}
+	}
+}
+
+func TestValidateSysctls(t *testing.T) {
+	valid := []string{
+		"net.foo.bar",
+		"kernel.shmmax",
+	}
+	invalid := []string{
+		"i..nvalid",
+		"_invalid",
+	}
+
+	sysctls := make([]api.Sysctl, len(valid))
+	for i, sysctl := range valid {
+		sysctls[i].Name = sysctl
+	}
+	errs := validateSysctls(sysctls, field.NewPath("foo"))
+	if len(errs) != 0 {
+		t.Errorf("unexpected validation errors: %v", errs)
+	}
+
+	sysctls = make([]api.Sysctl, len(invalid))
+	for i, sysctl := range invalid {
+		sysctls[i].Name = sysctl
+	}
+	errs = validateSysctls(sysctls, field.NewPath("foo"))
+	if len(errs) != 2 {
+		t.Errorf("expected 2 validation errors. Got: %v", errs)
+	} else {
+		if got, expected := errs[0].Error(), "foo"; !strings.Contains(got, expected) {
+			t.Errorf("unexpected errors: expected=%q, got=%q", expected, got)
+		}
+		if got, expected := errs[1].Error(), "foo"; !strings.Contains(got, expected) {
+			t.Errorf("unexpected errors: expected=%q, got=%q", expected, got)
+		}
+	}
+}
+
+func newNodeNameEndpoint(nodeName string) *api.Endpoints {
+	ep := &api.Endpoints{
+		ObjectMeta: api.ObjectMeta{
+			Name:            "foo",
+			Namespace:       api.NamespaceDefault,
+			ResourceVersion: "1",
+		},
+		Subsets: []api.EndpointSubset{
+			{
+				NotReadyAddresses: []api.EndpointAddress{},
+				Ports:             []api.EndpointPort{{Name: "https", Port: 443, Protocol: "TCP"}},
+				Addresses: []api.EndpointAddress{
+					{
+						IP:       "8.8.8.8",
+						Hostname: "zookeeper1",
+						NodeName: &nodeName}}}}}
+	return ep
+}
+
+func TestEndpointAddressNodeNameUpdateRestrictions(t *testing.T) {
+	oldEndpoint := newNodeNameEndpoint("kubernetes-minion-setup-by-backend")
+	updatedEndpoint := newNodeNameEndpoint("kubernetes-changed-nodename")
+	// Check that NodeName cannot be changed during update (if already set)
+	errList := ValidateEndpoints(updatedEndpoint)
+	errList = append(errList, ValidateEndpointsUpdate(updatedEndpoint, oldEndpoint)...)
+	if len(errList) == 0 {
+		t.Error("Endpoint should not allow changing of Subset.Addresses.NodeName on update")
+	}
+}
+
+func TestEndpointAddressNodeNameInvalidDNSSubdomain(t *testing.T) {
+	// Check NodeName DNS validation
+	endpoint := newNodeNameEndpoint("illegal*.nodename")
+	errList := ValidateEndpoints(endpoint)
+	if len(errList) == 0 {
+		t.Error("Endpoint should reject invalid NodeName")
+	}
+}
+
+func TestEndpointAddressNodeNameCanBeAnIPAddress(t *testing.T) {
+	endpoint := newNodeNameEndpoint("10.10.1.1")
+	errList := ValidateEndpoints(endpoint)
+	if len(errList) != 0 {
+		t.Error("Endpoint should accept a NodeName that is an IP address")
 	}
 }

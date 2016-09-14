@@ -178,17 +178,15 @@ func TestCheckVersion(t *testing.T) {
 	}
 	fs.version = "100"
 	tests := []struct {
-		minimumRktBinVersion     string
-		recommendedRktBinVersion string
-		minimumRktApiVersion     string
-		minimumSystemdVersion    string
-		err                      error
-		calledGetInfo            bool
-		calledSystemVersion      bool
+		minimumRktBinVersion  string
+		minimumRktApiVersion  string
+		minimumSystemdVersion string
+		err                   error
+		calledGetInfo         bool
+		calledSystemVersion   bool
 	}{
 		// Good versions.
 		{
-			"1.2.3",
 			"1.2.3",
 			"1.2.5",
 			"99",
@@ -199,7 +197,6 @@ func TestCheckVersion(t *testing.T) {
 		// Good versions.
 		{
 			"1.2.3+git",
-			"1.2.3+git",
 			"1.2.6-alpha",
 			"100",
 			nil,
@@ -208,7 +205,6 @@ func TestCheckVersion(t *testing.T) {
 		},
 		// Requires greater binary version.
 		{
-			"1.2.4",
 			"1.2.4",
 			"1.2.6-alpha",
 			"100",
@@ -219,7 +215,6 @@ func TestCheckVersion(t *testing.T) {
 		// Requires greater API version.
 		{
 			"1.2.3",
-			"1.2.3",
 			"1.2.6",
 			"100",
 			fmt.Errorf("rkt: API version is too old(%v), requires at least %v", fr.info.ApiVersion, "1.2.6"),
@@ -229,7 +224,6 @@ func TestCheckVersion(t *testing.T) {
 		// Requires greater API version.
 		{
 			"1.2.3",
-			"1.2.3",
 			"1.2.7",
 			"100",
 			fmt.Errorf("rkt: API version is too old(%v), requires at least %v", fr.info.ApiVersion, "1.2.7"),
@@ -238,7 +232,6 @@ func TestCheckVersion(t *testing.T) {
 		},
 		// Requires greater systemd version.
 		{
-			"1.2.3",
 			"1.2.3",
 			"1.2.7",
 			"101",
@@ -250,7 +243,7 @@ func TestCheckVersion(t *testing.T) {
 
 	for i, tt := range tests {
 		testCaseHint := fmt.Sprintf("test case #%d", i)
-		err := r.checkVersion(tt.minimumRktBinVersion, tt.recommendedRktBinVersion, tt.minimumRktApiVersion, tt.minimumSystemdVersion)
+		err := r.checkVersion(tt.minimumRktBinVersion, tt.minimumRktApiVersion, tt.minimumSystemdVersion)
 		assert.Equal(t, tt.err, err, testCaseHint)
 
 		if tt.calledGetInfo {
@@ -949,7 +942,9 @@ func TestSetApp(t *testing.T) {
 
 	tests := []struct {
 		container        *api.Container
-		opts             *kubecontainer.RunContainerOptions
+		mountPoints      []appctypes.MountPoint
+		containerPorts   []appctypes.Port
+		envs             []kubecontainer.EnvVar
 		ctx              *api.SecurityContext
 		podCtx           *api.PodSecurityContext
 		supplementalGids []int64
@@ -959,7 +954,9 @@ func TestSetApp(t *testing.T) {
 		// Nothing should change, but the "User" and "Group" should be filled.
 		{
 			container:        &api.Container{},
-			opts:             &kubecontainer.RunContainerOptions{},
+			mountPoints:      []appctypes.MountPoint{},
+			containerPorts:   []appctypes.Port{},
+			envs:             []kubecontainer.EnvVar{},
 			ctx:              nil,
 			podCtx:           nil,
 			supplementalGids: nil,
@@ -969,8 +966,10 @@ func TestSetApp(t *testing.T) {
 
 		// error verifying non-root.
 		{
-			container: &api.Container{},
-			opts:      &kubecontainer.RunContainerOptions{},
+			container:      &api.Container{},
+			mountPoints:    []appctypes.MountPoint{},
+			containerPorts: []appctypes.Port{},
+			envs:           []kubecontainer.EnvVar{},
 			ctx: &api.SecurityContext{
 				RunAsNonRoot: &runAsNonRootTrue,
 				RunAsUser:    &rootUser,
@@ -986,7 +985,9 @@ func TestSetApp(t *testing.T) {
 			container: &api.Container{
 				Args: []string{"foo"},
 			},
-			opts:             &kubecontainer.RunContainerOptions{},
+			mountPoints:      []appctypes.MountPoint{},
+			containerPorts:   []appctypes.Port{},
+			envs:             []kubecontainer.EnvVar{},
 			ctx:              nil,
 			podCtx:           nil,
 			supplementalGids: nil,
@@ -1025,16 +1026,14 @@ func TestSetApp(t *testing.T) {
 					Requests: api.ResourceList{"cpu": resource.MustParse("5m"), "memory": resource.MustParse("5M")},
 				},
 			},
-			opts: &kubecontainer.RunContainerOptions{
-				Envs: []kubecontainer.EnvVar{
-					{Name: "env-bar", Value: "foo"},
-				},
-				Mounts: []kubecontainer.Mount{
-					{Name: "mnt-bar", ContainerPath: "/mnt-bar", ReadOnly: true},
-				},
-				PortMappings: []kubecontainer.PortMapping{
-					{Name: "port-bar", Protocol: api.ProtocolTCP, ContainerPort: 1234},
-				},
+			mountPoints: []appctypes.MountPoint{
+				{Name: *appctypes.MustACName("mnt-bar"), Path: "/mnt-bar", ReadOnly: true},
+			},
+			containerPorts: []appctypes.Port{
+				{Name: *appctypes.MustACName("port-bar"), Protocol: "TCP", Port: 1234},
+			},
+			envs: []kubecontainer.EnvVar{
+				{Name: "env-bar", Value: "foo"},
 			},
 			ctx: &api.SecurityContext{
 				Capabilities: &api.Capabilities{
@@ -1088,17 +1087,15 @@ func TestSetApp(t *testing.T) {
 					Requests: api.ResourceList{"memory": resource.MustParse("5M")},
 				},
 			},
-			opts: &kubecontainer.RunContainerOptions{
-				Envs: []kubecontainer.EnvVar{
-					{Name: "env-foo", Value: "foo"},
-					{Name: "env-bar", Value: "bar"},
-				},
-				Mounts: []kubecontainer.Mount{
-					{Name: "mnt-foo", ContainerPath: "/mnt-bar", ReadOnly: true},
-				},
-				PortMappings: []kubecontainer.PortMapping{
-					{Name: "port-foo", Protocol: api.ProtocolTCP, ContainerPort: 1234},
-				},
+			mountPoints: []appctypes.MountPoint{
+				{Name: *appctypes.MustACName("mnt-foo"), Path: "/mnt-foo", ReadOnly: true},
+			},
+			containerPorts: []appctypes.Port{
+				{Name: *appctypes.MustACName("port-foo"), Protocol: "TCP", Port: 1234},
+			},
+			envs: []kubecontainer.EnvVar{
+				{Name: "env-foo", Value: "foo"},
+				{Name: "env-bar", Value: "bar"},
 			},
 			ctx: &api.SecurityContext{
 				Capabilities: &api.Capabilities{
@@ -1124,7 +1121,7 @@ func TestSetApp(t *testing.T) {
 					{Name: "env-bar", Value: "bar"},
 				},
 				MountPoints: []appctypes.MountPoint{
-					{Name: *appctypes.MustACName("mnt-foo"), Path: "/mnt-bar", ReadOnly: true},
+					{Name: *appctypes.MustACName("mnt-foo"), Path: "/mnt-foo", ReadOnly: true},
 				},
 				Ports: []appctypes.Port{
 					{Name: *appctypes.MustACName("port-foo"), Protocol: "TCP", Port: 1234},
@@ -1142,7 +1139,11 @@ func TestSetApp(t *testing.T) {
 	for i, tt := range tests {
 		testCaseHint := fmt.Sprintf("test case #%d", i)
 		img := baseImageManifest(t)
-		err := setApp(img, tt.container, tt.opts, tt.ctx, tt.podCtx, tt.supplementalGids)
+
+		err := setApp(img, tt.container,
+			tt.mountPoints, tt.containerPorts, tt.envs,
+			tt.ctx, tt.podCtx, tt.supplementalGids)
+
 		if err == nil && tt.err != nil || err != nil && tt.err == nil {
 			t.Errorf("%s: expect %v, saw %v", testCaseHint, tt.err, err)
 		}
@@ -1156,6 +1157,9 @@ func TestSetApp(t *testing.T) {
 
 func TestGenerateRunCommand(t *testing.T) {
 	hostName := "test-hostname"
+	boolTrue := true
+	boolFalse := false
+
 	tests := []struct {
 		networkPlugin network.NetworkPlugin
 		pod           *api.Pod
@@ -1176,7 +1180,9 @@ func TestGenerateRunCommand(t *testing.T) {
 				ObjectMeta: api.ObjectMeta{
 					Name: "pod-name-foo",
 				},
-				Spec: api.PodSpec{},
+				Spec: api.PodSpec{
+					Containers: []api.Container{{Name: "container-foo"}},
+				},
 			},
 			"rkt-uuid-foo",
 			"default",
@@ -1192,6 +1198,9 @@ func TestGenerateRunCommand(t *testing.T) {
 			&api.Pod{
 				ObjectMeta: api.ObjectMeta{
 					Name: "pod-name-foo",
+				},
+				Spec: api.PodSpec{
+					Containers: []api.Container{{Name: "container-foo"}},
 				},
 			},
 			"rkt-uuid-foo",
@@ -1213,6 +1222,7 @@ func TestGenerateRunCommand(t *testing.T) {
 					SecurityContext: &api.PodSecurityContext{
 						HostNetwork: true,
 					},
+					Containers: []api.Container{{Name: "container-foo"}},
 				},
 			},
 			"rkt-uuid-foo",
@@ -1234,6 +1244,7 @@ func TestGenerateRunCommand(t *testing.T) {
 					SecurityContext: &api.PodSecurityContext{
 						HostNetwork: false,
 					},
+					Containers: []api.Container{{Name: "container-foo"}},
 				},
 			},
 			"rkt-uuid-foo",
@@ -1255,6 +1266,7 @@ func TestGenerateRunCommand(t *testing.T) {
 					SecurityContext: &api.PodSecurityContext{
 						HostNetwork: true,
 					},
+					Containers: []api.Container{{Name: "container-foo"}},
 				},
 			},
 			"rkt-uuid-foo",
@@ -1272,7 +1284,9 @@ func TestGenerateRunCommand(t *testing.T) {
 				ObjectMeta: api.ObjectMeta{
 					Name: "pod-name-foo",
 				},
-				Spec: api.PodSpec{},
+				Spec: api.PodSpec{
+					Containers: []api.Container{{Name: "container-foo"}},
+				},
 			},
 			"rkt-uuid-foo",
 			"default",
@@ -1281,6 +1295,50 @@ func TestGenerateRunCommand(t *testing.T) {
 			"pod-hostname-foo",
 			nil,
 			"/bin/rkt/rkt --insecure-options=image,ondisk --local-config=/var/rkt/local/data --dir=/var/data run-prepared --net=rkt.kubernetes.io --dns=127.0.0.1 --dns-search=. --dns-opt=ndots:5 --hostname=pod-hostname-foo rkt-uuid-foo",
+		},
+		// Case #6, if all containers are privileged, the result should have 'insecure-options=all-run'
+		{
+			kubenet.NewPlugin("/tmp"),
+			&api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					Name: "pod-name-foo",
+				},
+				Spec: api.PodSpec{
+					Containers: []api.Container{
+						{Name: "container-foo", SecurityContext: &api.SecurityContext{Privileged: &boolTrue}},
+						{Name: "container-bar", SecurityContext: &api.SecurityContext{Privileged: &boolTrue}},
+					},
+				},
+			},
+			"rkt-uuid-foo",
+			"default",
+			[]string{},
+			[]string{},
+			"pod-hostname-foo",
+			nil,
+			"/usr/bin/nsenter --net=/var/run/netns/default -- /bin/rkt/rkt --insecure-options=image,ondisk,all-run --local-config=/var/rkt/local/data --dir=/var/data run-prepared --net=host --hostname=pod-hostname-foo rkt-uuid-foo",
+		},
+		// Case #7, if not all containers are privileged, the result should not have 'insecure-options=all-run'
+		{
+			kubenet.NewPlugin("/tmp"),
+			&api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					Name: "pod-name-foo",
+				},
+				Spec: api.PodSpec{
+					Containers: []api.Container{
+						{Name: "container-foo", SecurityContext: &api.SecurityContext{Privileged: &boolTrue}},
+						{Name: "container-bar", SecurityContext: &api.SecurityContext{Privileged: &boolFalse}},
+					},
+				},
+			},
+			"rkt-uuid-foo",
+			"default",
+			[]string{},
+			[]string{},
+			"pod-hostname-foo",
+			nil,
+			"/usr/bin/nsenter --net=/var/run/netns/default -- /bin/rkt/rkt --insecure-options=image,ondisk --local-config=/var/rkt/local/data --dir=/var/data run-prepared --net=host --hostname=pod-hostname-foo rkt-uuid-foo",
 		},
 	}
 

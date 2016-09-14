@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.3/docs/devel/development.md).
+[here](http://releases.k8s.io/release-1.4/docs/devel/development.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -90,10 +90,11 @@ source control system). Use `apt-get install mercurial` or `yum install
 mercurial` on Linux, or [brew.sh](http://brew.sh) on OS X, or download directly
 from mercurial.
 
-Install godep (may require sudo):
+Install godep and go-bindata (may require sudo):
 
 ```sh
 go get -u github.com/tools/godep
+go get -u github.com/jteeuwen/go-bindata/go-bindata
 ```
 
 Note:
@@ -142,7 +143,7 @@ Since kubernetes is mostly built and tested in containers, there are a few
 unique places you need to update the go version.
 
 - The image for cross compiling in [build/build-image/cross/](../../build/build-image/cross/). The `VERSION` file and `Dockerfile`.
-- Update [dockerized-e2e-runner.sh](https://github.com/kubernetes/test-infra/blob/master/jenkins/dockerized-e2e-runner.sh) to run a kubekins-e2e with the desired go version, which requires pushing [e2e-image](../../hack/jenkins/e2e-image/) and [test-image](../../hack/jenkins/test-image/) images that are `FROM` the desired go version.
+- Update [dockerized-e2e-runner.sh](https://github.com/kubernetes/test-infra/blob/master/jenkins/dockerized-e2e-runner.sh) to run a kubekins-e2e with the desired go version, which requires pushing [e2e-image](https://github.com/kubernetes/test-infra/tree/master/jenkins/e2e-image) and [test-image](https://github.com/kubernetes/test-infra/tree/master/jenkins/test-image) images that are `FROM` the desired go version.
 - The docker image being run in [hack/jenkins/gotest-dockerized.sh](../../hack/jenkins/gotest-dockerized.sh).
 - The cross tag `KUBE_BUILD_IMAGE_CROSS_TAG` in [build/common.sh](../../build/common.sh)
 
@@ -224,6 +225,8 @@ git push -f origin my-feature
 1. Visit https://github.com/$YOUR_GITHUB_USERNAME/kubernetes
 2. Click the "Compare & pull request" button next to your "my-feature" branch.
 3. Check out the pull request [process](pull-requests.md) for more details
+
+**Note:** If you have write access, please refrain from using the GitHub UI for creating PRs, because GitHub will create the PR branch inside the main repository rather than inside your fork.
 
 ### When to retain commits and when to squash
 

@@ -46,12 +46,14 @@ type TestContextType struct {
 	// Timeout for waiting for system pods to be running
 	SystemPodsStartupTimeout time.Duration
 	UpgradeTarget            string
+	UpgradeImage             string
 	PrometheusPushGateway    string
 	ContainerRuntime         string
 	MasterOSDistro           string
 	NodeOSDistro             string
 	VerifyServiceAccount     bool
 	DeleteNamespace          bool
+	AllowedNotReadyNodes     int
 	CleanStart               bool
 	// If set to 'true' or 'all' framework will start a goroutine monitoring resource usage of system add-ons.
 	// It will read the data every 30 seconds from all Nodes and print summary during afterEach. If set to 'master'
@@ -69,6 +71,8 @@ type TestContextType struct {
 	DumpLogsOnFailure bool
 	// If the garbage collector is enabled in the kube-apiserver and kube-controller-manager.
 	GarbageCollectorEnabled bool
+	// FeatureGates is a set of key=value pairs that describe feature gates for alpha/experimental features.
+	FeatureGates string
 	// Node e2e specific test context
 	NodeTestContextType
 }
@@ -95,6 +99,7 @@ type CloudConfig struct {
 	NodeInstanceGroup string
 	NumNodes          int
 	ClusterTag        string
+	Network           string
 
 	Provider cloudprovider.Interface
 }
@@ -119,9 +124,11 @@ func RegisterCommonFlags() {
 	flag.StringVar(&TestContext.OutputPrintType, "output-print-type", "hr", "Comma separated list: 'hr' for human readable summaries 'json' for JSON ones.")
 	flag.BoolVar(&TestContext.DumpLogsOnFailure, "dump-logs-on-failure", true, "If set to true test will dump data about the namespace in which test was running.")
 	flag.BoolVar(&TestContext.DeleteNamespace, "delete-namespace", true, "If true tests will delete namespace after completion. It is only designed to make debugging easier, DO NOT turn it off by default.")
+	flag.IntVar(&TestContext.AllowedNotReadyNodes, "allowed-not-ready-nodes", 0, "If non-zero, framework will allow for that many non-ready nodes when checking for all ready nodes.")
 	flag.StringVar(&TestContext.Host, "host", "http://127.0.0.1:8080", "The host, or apiserver, to connect to")
 	flag.StringVar(&TestContext.ReportPrefix, "report-prefix", "", "Optional prefix for JUnit XML reports. Default is empty, which doesn't prepend anything to the default name.")
 	flag.StringVar(&TestContext.ReportDir, "report-dir", "", "Path to the directory where the JUnit XML reports should be saved. Default is empty, which doesn't generate these reports.")
+	flag.StringVar(&TestContext.FeatureGates, "feature-gates", "", "A set of key=value pairs that describe feature gates for alpha/experimental features.")
 }
 
 // Register flags specific to the cluster e2e test suite.
@@ -150,15 +157,17 @@ func RegisterClusterFlags() {
 	flag.StringVar(&cloudConfig.Zone, "gce-zone", "", "GCE zone being used, if applicable")
 	flag.StringVar(&cloudConfig.Cluster, "gke-cluster", "", "GKE name of cluster being used, if applicable")
 	flag.StringVar(&cloudConfig.NodeInstanceGroup, "node-instance-group", "", "Name of the managed instance group for nodes. Valid only for gce, gke or aws. If there is more than one group: comma separated list of groups.")
+	flag.StringVar(&cloudConfig.Network, "network", "e2e", "The cloud provider network for this e2e cluster.")
 	flag.IntVar(&cloudConfig.NumNodes, "num-nodes", -1, "Number of nodes in the cluster")
 
 	flag.StringVar(&cloudConfig.ClusterTag, "cluster-tag", "", "Tag used to identify resources.  Only required if provider is aws.")
 	flag.IntVar(&TestContext.MinStartupPods, "minStartupPods", 0, "The number of pods which we need to see in 'Running' state with a 'Ready' condition of true, before we try running tests. This is useful in any cluster which needs some base pod-based services running before it can be used.")
 	flag.DurationVar(&TestContext.SystemPodsStartupTimeout, "system-pods-startup-timeout", 10*time.Minute, "Timeout for waiting for all system pods to be running before starting tests.")
 	flag.StringVar(&TestContext.UpgradeTarget, "upgrade-target", "ci/latest", "Version to upgrade to (e.g. 'release/stable', 'release/latest', 'ci/latest', '0.19.1', '0.19.1-669-gabac8c8') if doing an upgrade test.")
+	flag.StringVar(&TestContext.UpgradeImage, "upgrade-image", "", "Image to upgrade to (e.g. 'container_vm' or 'gci') if doing an upgrade test.")
 	flag.StringVar(&TestContext.PrometheusPushGateway, "prom-push-gateway", "", "The URL to prometheus gateway, so that metrics can be pushed during e2es and scraped by prometheus. Typically something like 127.0.0.1:9091.")
 	flag.BoolVar(&TestContext.CleanStart, "clean-start", false, "If true, purge all namespaces except default and system before running tests. This serves to Cleanup test namespaces from failed/interrupted e2e runs in a long-lived cluster.")
-	flag.BoolVar(&TestContext.GarbageCollectorEnabled, "garbage-collector-enabled", false, "Set to true if the garbage collector is enabled in the kube-apiserver and kube-controller-manager, then some tests will rely on the garbage collector to delete dependent resources.")
+	flag.BoolVar(&TestContext.GarbageCollectorEnabled, "garbage-collector-enabled", true, "Set to true if the garbage collector is enabled in the kube-apiserver and kube-controller-manager, then some tests will rely on the garbage collector to delete dependent resources.")
 }
 
 // Register flags specific to the node e2e test suite.
@@ -169,6 +178,6 @@ func RegisterNodeFlags() {
 	flag.BoolVar(&TestContext.DisableKubenet, "disable-kubenet", false, "If true, start kubelet without kubenet. (default false)")
 	// TODO: uncomment this when the flag is re-enabled in kubelet
 	//flag.BoolVar(&TestContext.CgroupsPerQOS, "cgroups-per-qos", false, "Enable creation of QoS cgroup hierarchy, if true top level QoS and pod cgroups are created.")
-	flag.StringVar(&TestContext.EvictionHard, "eviction-hard", "memory.available<250Mi", "The hard eviction thresholds. If set, pods get evicted when the specified resources drop below the thresholds.")
+	flag.StringVar(&TestContext.EvictionHard, "eviction-hard", "memory.available<250Mi,imagefs.available<10%", "The hard eviction thresholds. If set, pods get evicted when the specified resources drop below the thresholds.")
 	flag.StringVar(&TestContext.ManifestPath, "manifest-path", "", "The path to the static pod manifest file.")
 }

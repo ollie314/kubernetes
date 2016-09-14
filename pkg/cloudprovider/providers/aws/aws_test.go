@@ -497,6 +497,14 @@ func (elb *FakeELB) SetLoadBalancerPoliciesForBackendServer(*elb.SetLoadBalancer
 	panic("Not implemented")
 }
 
+func (elb *FakeELB) DescribeLoadBalancerAttributes(*elb.DescribeLoadBalancerAttributesInput) (*elb.DescribeLoadBalancerAttributesOutput, error) {
+	panic("Not implemented")
+}
+
+func (elb *FakeELB) ModifyLoadBalancerAttributes(*elb.ModifyLoadBalancerAttributesInput) (*elb.ModifyLoadBalancerAttributesOutput, error) {
+	panic("Not implemented")
+}
+
 type FakeASG struct {
 	aws *FakeAWSServices
 }
@@ -1290,6 +1298,11 @@ func TestBuildListener(t *testing.T) {
 			"Named port not in whitelist, passthrough",
 			443, "", 8011, "tcp", "cert", "foo,bar",
 			false, "tcp", "tcp", "",
+		},
+		{
+			"HTTP->HTTP",
+			80, "", 8012, "http", "", "",
+			false, "http", "http", "",
 		},
 	}
 

@@ -206,7 +206,7 @@ func (r resourceUsageByCPU) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
 func (r resourceUsageByCPU) Less(i, j int) bool { return r[i].CPUUsageInCores < r[j].CPUUsageInCores }
 
 // The percentiles to report.
-var percentiles = [...]float64{0.05, 0.20, 0.50, 0.70, 0.90, 0.95, 0.99}
+var percentiles = [...]float64{0.50, 0.90, 0.95, 0.99, 1.00}
 
 // GetBasicCPUStats returns the percentiles the cpu usage in cores for
 // containerName. This method examines all data currently in the buffer.
@@ -292,8 +292,8 @@ func formatCPUSummary(summary framework.ContainersCPUSummary) string {
 }
 
 // createCadvisorPod creates a standalone cadvisor pod for fine-grain resource monitoring.
-func createCadvisorPod(f *framework.Framework) {
-	f.PodClient().CreateSync(&api.Pod{
+func getCadvisorPod() *api.Pod {
+	return &api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Name: cadvisorPodName,
 		},
@@ -363,24 +363,22 @@ func createCadvisorPod(f *framework.Framework) {
 				},
 			},
 		},
-	})
+	}
 }
 
-// deleteBatchPod deletes a batch of pods (synchronous).
-func deleteBatchPod(f *framework.Framework, pods []*api.Pod) {
-	ns := f.Namespace.Name
+// deletePodsSync deletes a list of pods and block until pods disappear.
+func deletePodsSync(f *framework.Framework, pods []*api.Pod) {
 	var wg sync.WaitGroup
 	for _, pod := range pods {
 		wg.Add(1)
 		go func(pod *api.Pod) {
 			defer wg.Done()
 
-			err := f.Client.Pods(ns).Delete(pod.ObjectMeta.Name, api.NewDeleteOptions(30))
+			err := f.PodClient().Delete(pod.ObjectMeta.Name, api.NewDeleteOptions(30))
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(framework.WaitForPodToDisappear(f.Client, ns, pod.ObjectMeta.Name, labels.Everything(),
-				30*time.Second, 10*time.Minute)).
-				NotTo(HaveOccurred())
+			Expect(framework.WaitForPodToDisappear(f.Client, f.Namespace.Name, pod.ObjectMeta.Name, labels.Everything(),
+				30*time.Second, 10*time.Minute)).NotTo(HaveOccurred())
 		}(pod)
 	}
 	wg.Wait()

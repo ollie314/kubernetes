@@ -242,7 +242,7 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 	if err != nil {
 		glog.Fatalf("Failed to initialize nodecontroller: %v", err)
 	}
-	nodeController.Run(s.NodeSyncPeriod.Duration)
+	nodeController.Run()
 	time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 
 	serviceController, err := servicecontroller.New(cloud, clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "service-controller")), s.ClusterName)
@@ -260,7 +260,7 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 			glog.Warning("configure-cloud-routes is set, but cloud provider does not support routes. Will not configure cloud provider routes.")
 		} else {
 			routeController := routecontroller.New(routes, clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "route-controller")), s.ClusterName, clusterCIDR)
-			routeController.Run(s.NodeSyncPeriod.Duration)
+			routeController.Run(s.RouteReconciliationPeriod.Duration)
 			time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 		}
 	} else {
@@ -430,13 +430,13 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 		ProbeControllerVolumePlugins(cloud, s.VolumeConfiguration),
 		cloud,
 		s.ClusterName,
-		nil, // volumeSource
+		sharedInformers.PersistentVolumes().Informer(),
 		nil, // claimSource
 		nil, // classSource
 		nil, // eventRecorder
 		s.VolumeConfiguration.EnableDynamicProvisioning,
 	)
-	volumeController.Run()
+	volumeController.Run(wait.NeverStop)
 	time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 
 	attachDetachController, attachDetachControllerErr :=
@@ -455,7 +455,7 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 	go attachDetachController.Run(wait.NeverStop)
 	time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 
-	groupVersion = "certificates/v1alpha1"
+	groupVersion = "certificates.k8s.io/v1alpha1"
 	resources, found = resourceMap[groupVersion]
 	glog.Infof("Attempting to start certificates, full resource map %+v", resourceMap)
 	if containsVersion(versions, groupVersion) && found {
@@ -468,6 +468,7 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 				resyncPeriod,
 				s.ClusterSigningCertFile,
 				s.ClusterSigningKeyFile,
+				s.ApproveAllKubeletCSRsForGroup,
 			)
 			if err != nil {
 				glog.Errorf("Failed to start certificate controller: %v", err)

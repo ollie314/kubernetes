@@ -28,22 +28,25 @@ import (
 	_ "k8s.io/kubernetes/pkg/cloudprovider/providers"
 
 	// Volume plugins
+	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/gce"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/openstack"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/vsphere"
+	utilconfig "k8s.io/kubernetes/pkg/util/config"
 	"k8s.io/kubernetes/pkg/util/io"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/aws_ebs"
+	"k8s.io/kubernetes/pkg/volume/azure_dd"
 	"k8s.io/kubernetes/pkg/volume/cinder"
 	"k8s.io/kubernetes/pkg/volume/flexvolume"
 	"k8s.io/kubernetes/pkg/volume/gce_pd"
+	"k8s.io/kubernetes/pkg/volume/glusterfs"
 	"k8s.io/kubernetes/pkg/volume/host_path"
 	"k8s.io/kubernetes/pkg/volume/nfs"
+	"k8s.io/kubernetes/pkg/volume/rbd"
 	"k8s.io/kubernetes/pkg/volume/vsphere_volume"
-
-	"github.com/golang/glog"
 )
 
 // ProbeAttachableVolumePlugins collects all volume plugins for the attach/
@@ -59,6 +62,8 @@ func ProbeAttachableVolumePlugins(config componentconfig.VolumeConfiguration) []
 	allPlugins = append(allPlugins, gce_pd.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, cinder.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, flexvolume.ProbeVolumePlugins(config.FlexVolumePluginDir)...)
+	allPlugins = append(allPlugins, vsphere_volume.ProbeVolumePlugins()...)
+	allPlugins = append(allPlugins, azure_dd.ProbeVolumePlugins()...)
 	return allPlugins
 }
 
@@ -97,7 +102,9 @@ func ProbeControllerVolumePlugins(cloud cloudprovider.Interface, config componen
 		glog.Fatalf("Could not create NFS recycler pod from file %s: %+v", config.PersistentVolumeRecyclerConfiguration.PodTemplateFilePathNFS, err)
 	}
 	allPlugins = append(allPlugins, nfs.ProbeVolumePlugins(nfsConfig)...)
-
+	allPlugins = append(allPlugins, glusterfs.ProbeVolumePlugins()...)
+	// add rbd provisioner
+	allPlugins = append(allPlugins, rbd.ProbeVolumePlugins()...)
 	if cloud != nil {
 		switch {
 		case aws.ProviderName == cloud.ProviderName():
@@ -121,6 +128,8 @@ func ProbeControllerVolumePlugins(cloud cloudprovider.Interface, config componen
 // TODO: remove in Kubernetes 1.5
 func NewAlphaVolumeProvisioner(cloud cloudprovider.Interface, config componentconfig.VolumeConfiguration) (volume.ProvisionableVolumePlugin, error) {
 	switch {
+	case !utilconfig.DefaultFeatureGate.DynamicVolumeProvisioning():
+		return nil, nil
 	case cloud == nil && config.EnableHostPathProvisioning:
 		return getProvisionablePluginFromVolumePlugins(host_path.ProbeVolumePlugins(
 			volume.VolumeConfig{

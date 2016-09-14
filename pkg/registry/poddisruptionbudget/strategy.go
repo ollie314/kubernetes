@@ -97,12 +97,12 @@ func (podDisruptionBudgetStrategy) AllowUnconditionalUpdate() bool {
 
 // PodDisruptionBudgetToSelectableFields returns a field set that represents the object.
 func PodDisruptionBudgetToSelectableFields(podDisruptionBudget *policy.PodDisruptionBudget) fields.Set {
-	return generic.ObjectMetaFieldsSet(podDisruptionBudget.ObjectMeta, true)
+	return generic.ObjectMetaFieldsSet(&podDisruptionBudget.ObjectMeta, true)
 }
 
 // MatchPodDisruptionBudget is the filter used by the generic etcd backend to watch events
 // from etcd to clients of the apiserver only interested in specific labels/fields.
-func MatchPodDisruptionBudget(label labels.Selector, field fields.Selector) generic.Matcher {
+func MatchPodDisruptionBudget(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
 	return &generic.SelectionPredicate{
 		Label: label,
 		Field: field,

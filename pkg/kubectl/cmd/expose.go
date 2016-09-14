@@ -42,7 +42,7 @@ type ExposeOptions struct {
 var (
 	expose_resources = dedent.Dedent(`
 		pod (po), service (svc), replicationcontroller (rc),
-		deployment, replicaset (rs)
+		deployment (deploy), replicaset (rs)
 	`)
 
 	expose_long = dedent.Dedent(`
@@ -147,7 +147,7 @@ func RunExpose(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []str
 		Do()
 	err = r.Err()
 	if err != nil {
-		return err
+		return cmdutil.UsageError(cmd, err.Error())
 	}
 
 	// Get the generator, setup and validate all required parameters

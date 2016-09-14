@@ -107,7 +107,7 @@ EOF
   # files. Whenever logrotate is ran, this config will:
   # * rotate the log file if its size is > 100Mb OR if one day has elapsed
   # * save rotated logs into a gzipped timestamped backup
-  # * log file timestamp (controlled by 'dateformat') includes seconds too. this
+  # * log file timestamp (controlled by 'dateformat') includes seconds too. This
   #   ensures that logrotate can generate unique logfiles during each rotation
   #   (otherwise it skips rotation if 'maxsize' is reached multiple times in a
   #   day).
@@ -279,6 +279,36 @@ contexts:
   name: webhook
 EOF
   fi
+
+if [[ -n "${GCP_IMAGE_VERIFICATION_URL:-}" ]]; then
+    # This is the config file for the image review webhook.
+    cat <<EOF >/etc/gcp_image_review.config
+clusters:
+  - name: gcp-image-review-server
+    cluster:
+      server: ${GCP_IMAGE_VERIFICATION_URL}
+users:
+  - name: kube-apiserver
+    user:
+      auth-provider:
+        name: gcp
+current-context: webhook
+contexts:
+- context:
+    cluster: gcp-image-review-server
+    user: kube-apiserver
+  name: webhook
+EOF
+    # This is the config for the image review admission controller.
+    cat <<EOF >/etc/admission_controller.config
+imagePolicy:
+  kubeConfigFile: /etc/gcp_image_review.config
+  allowTTL: 30
+  denyTTL: 30
+  retryBackoff: 500
+  defaultAllow: true
+EOF
+  fi
 }
 
 function create-kubelet-kubeconfig {
@@ -348,7 +378,10 @@ function assemble-docker-flags {
     docker_opts+=" --log-level=warn"
   fi
   local use_net_plugin="true"
-  if [[ "${NETWORK_PROVIDER:-}" != "kubenet" && "${NETWORK_PROVIDER:-}" != "cni" ]]; then
+  if [[ "${NETWORK_PROVIDER:-}" == "kubenet" || "${NETWORK_PROVIDER:-}" == "cni" ]]; then
+    # set docker0 cidr to private ip address range to avoid conflict with cbr0 cidr range
+    docker_opts+=" --bip=169.254.123.1/24"
+  else
     use_net_plugin="false"
     docker_opts+=" --bridge=cbr0"
   fi
@@ -406,13 +439,26 @@ function load-docker-images {
   fi
 }
 
-# A kubelet systemd service is built in GCI image, but by default it is not started
-# when an instance is up. To start kubelet, the command line flags should be written
-# to /etc/default/kubelet in the format "KUBELET_OPTS=<flags>", and then start kubelet
-# using systemctl. This function assembles the command line and start the kubelet
-# systemd service.
+# This function assembles the kubelet systemd service file and starts it
+# using systemctl.
 function start-kubelet {
   echo "Start kubelet"
+  local kubelet_bin="${KUBE_HOME}/bin/kubelet"
+  local -r version="$("${kubelet_bin}" --version=true | cut -f2 -d " ")"
+  local -r builtin_kubelet="/usr/bin/kubelet"
+  if [[ "${TEST_CLUSTER:-}" == "true" ]]; then
+    # Determine which binary to use on test clusters. We use the built-in
+    # version only if the downloaded version is the same as the built-in
+    # version. This allows GCI to run some of the e2e tests to qualify the
+    # built-in kubelet.
+    if [[ -x "${builtin_kubelet}" ]]; then
+      local -r builtin_version="$("${builtin_kubelet}"  --version=true | cut -f2 -d " ")"
+      if [[ "${builtin_version}" == "${version}" ]]; then
+        kubelet_bin="${builtin_kubelet}"
+      fi
+    fi
+  fi
+  echo "Using kubelet binary at ${kubelet_bin}"
   local flags="${KUBELET_TEST_LOG_LEVEL:-"--v=2"} ${KUBELET_TEST_ARGS:-}"
   flags+=" --allow-privileged=true"
   flags+=" --babysit-daemons=true"
@@ -450,7 +496,11 @@ function start-kubelet {
   fi
   # Network plugin
   if [[ -n "${NETWORK_PROVIDER:-}" ]]; then
-    flags+=" --network-plugin-dir=/home/kubernetes/bin"
+    if [[ "${NETWORK_PROVIDER:-}" == "cni" ]]; then
+      flags+=" --cni-bin-dir=/home/kubernetes/bin"
+    else
+      flags+=" --network-plugin-dir=/home/kubernetes/bin"
+    fi
     flags+=" --network-plugin=${NETWORK_PROVIDER}"
   fi
   flags+=" --reconcile-cidr=${reconcile_cidr}"
@@ -474,14 +524,31 @@ function start-kubelet {
      flags+=" --configure-cbr0=${ALLOCATE_NODE_CIDRS}"
   fi
   if [[ -n "${FEATURE_GATES:-}" ]]; then
-     flags+=" --feature-gates=${feature_gates}"
+     flags+=" --feature-gates=${FEATURE_GATES}"
   fi
-  echo "KUBELET_OPTS=\"${flags}\"" > /etc/default/kubelet
 
-  # Delete docker0 to avoid interference
+  local -r kubelet_env_file="/etc/default/kubelet"
+  echo "KUBELET_OPTS=\"${flags}\"" > "${kubelet_env_file}"
+
+  # Write the systemd service file for kubelet.
+  cat <<EOF >/etc/systemd/system/kubelet.service
+[Unit]
+Description=Kubernetes kubelet
+Requires=network-online.target
+After=network-online.target
+
+[Service]
+Restart=always
+RestartSec=10
+EnvironmentFile=${kubelet_env_file}
+ExecStart=${kubelet_bin} \$KUBELET_OPTS
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # Flush iptables nat table
   iptables -t nat -F || true
-  ip link set docker0 down || true
-  brctl delbr docker0 || true
 
   systemctl start kubelet.service
 }
@@ -558,6 +625,11 @@ function prepare-etcd-manifest {
   sed -i -e "s@{{ *etcd_cluster *}}@$etcd_cluster@g" "${temp_file}"
   sed -i -e "s@{{ *storage_backend *}}@${STORAGE_BACKEND:-}@g" "${temp_file}"
   sed -i -e "s@{{ *cluster_state *}}@$cluster_state@g" "${temp_file}"
+  if [[ -n "${TEST_ETCD_VERSION:-}" ]]; then
+    sed -i -e "s@{{ *pillar\.get('etcd_docker_tag', '\(.*\)') *}}@${TEST_ETCD_VERSION}@g" "${temp_file}"
+  else
+    sed -i -e "s@{{ *pillar\.get('etcd_docker_tag', '\(.*\)') *}}@\1@g" "${temp_file}"
+  fi
   # Replace the volume host path.
   sed -i -e "s@/mnt/master-pd/var/etcd@/mnt/disks/master-pd/var/etcd@g" "${temp_file}"
   mv "${temp_file}" /etc/kubernetes/manifests
@@ -665,9 +737,24 @@ function start-kube-apiserver {
   if [[ -n "${SERVICE_CLUSTER_IP_RANGE:-}" ]]; then
     params+=" --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE}"
   fi
+
+  local admission_controller_config_mount=""
+  local admission_controller_config_volume=""
+  local image_policy_webhook_config_mount=""
+  local image_policy_webhook_config_volume=""
   if [[ -n "${ADMISSION_CONTROL:-}" ]]; then
     params+=" --admission-control=${ADMISSION_CONTROL}"
+    if [[ ${ADMISSION_CONTROL} == *"ImagePolicyWebhook"* ]]; then
+      params+=" --admission-control-config-file=/etc/admission_controller.config"
+      # Mount the file to configure admission controllers if ImagePolicyWebhook is set.
+      admission_controller_config_mount="{\"name\": \"admissioncontrollerconfigmount\",\"mountPath\": \"/etc/admission_controller.config\", \"readOnly\": false},"
+      admission_controller_config_volume="{\"name\": \"admissioncontrollerconfigmount\",\"hostPath\": {\"path\": \"/etc/admission_controller.config\"}},"
+      # Mount the file to configure the ImagePolicyWebhook's webhook.
+      image_policy_webhook_config_mount="{\"name\": \"imagepolicywebhookconfigmount\",\"mountPath\": \"/etc/gcp_image_review.config\", \"readOnly\": false},"
+      image_policy_webhook_config_volume="{\"name\": \"imagepolicywebhookconfigmount\",\"hostPath\": {\"path\": \"/etc/gcp_image_review.config\"}},"
+    fi
   fi
+
   if [[ -n "${KUBE_APISERVER_REQUEST_TIMEOUT:-}" ]]; then
     params+=" --min-request-timeout=${KUBE_APISERVER_REQUEST_TIMEOUT}"
   fi
@@ -684,8 +771,8 @@ function start-kube-apiserver {
     params+=" --ssh-keyfile=/etc/srv/sshproxy/.sshkeyfile"
   fi
 
-  webhook_authn_config_mount=""
-  webhook_authn_config_volume=""
+  local webhook_authn_config_mount=""
+  local webhook_authn_config_volume=""
   if [[ -n "${GCP_AUTHN_URL:-}" ]]; then
     params+=" --authentication-token-webhook-config-file=/etc/gcp_authn.config"
     webhook_authn_config_mount="{\"name\": \"webhookauthnconfigmount\",\"mountPath\": \"/etc/gcp_authn.config\", \"readOnly\": false},"
@@ -693,8 +780,8 @@ function start-kube-apiserver {
   fi
 
   params+=" --authorization-mode=ABAC"
-  webhook_config_mount=""
-  webhook_config_volume=""
+  local webhook_config_mount=""
+  local webhook_config_volume=""
   if [[ -n "${GCP_AUTHZ_URL:-}" ]]; then
     params+=",Webhook --authorization-webhook-config-file=/etc/gcp_authz.config"
     webhook_config_mount="{\"name\": \"webhookconfigmount\",\"mountPath\": \"/etc/gcp_authz.config\", \"readOnly\": false},"
@@ -703,10 +790,10 @@ function start-kube-apiserver {
   local -r src_dir="${KUBE_HOME}/kube-manifests/kubernetes/gci-trusty"
 
   if [[ -n "${KUBE_USER:-}" ]]; then
-	  local -r abac_policy_json="${src_dir}/abac-authz-policy.jsonl"
-	  remove-salt-config-comments "${abac_policy_json}"
-	  sed -i -e "s@{{kube_user}}@${KUBE_USER}@g" "${abac_policy_json}"
-	  cp "${abac_policy_json}" /etc/srv/kubernetes/
+    local -r abac_policy_json="${src_dir}/abac-authz-policy.jsonl"
+    remove-salt-config-comments "${abac_policy_json}"
+    sed -i -e "s/{{kube_user}}/${KUBE_USER}/g" "${abac_policy_json}"
+    cp "${abac_policy_json}" /etc/srv/kubernetes/
   fi
 
   src_file="${src_dir}/kube-apiserver.manifest"
@@ -729,6 +816,10 @@ function start-kube-apiserver {
   sed -i -e "s@{{webhook_authn_config_volume}}@${webhook_authn_config_volume}@g" "${src_file}"
   sed -i -e "s@{{webhook_config_mount}}@${webhook_config_mount}@g" "${src_file}"
   sed -i -e "s@{{webhook_config_volume}}@${webhook_config_volume}@g" "${src_file}"
+  sed -i -e "s@{{admission_controller_config_mount}}@${admission_controller_config_mount}@g" "${src_file}"
+  sed -i -e "s@{{admission_controller_config_volume}}@${admission_controller_config_volume}@g" "${src_file}"
+  sed -i -e "s@{{image_policy_webhook_config_mount}}@${image_policy_webhook_config_mount}@g" "${src_file}"
+  sed -i -e "s@{{image_policy_webhook_config_volume}}@${image_policy_webhook_config_volume}@g" "${src_file}"
   cp "${src_file}" /etc/kubernetes/manifests
 }
 
@@ -803,6 +894,9 @@ function start-kube-scheduler {
   params="${SCHEDULER_TEST_LOG_LEVEL:-"--v=2"} ${SCHEDULER_TEST_ARGS:-}"
   if [[ -n "${FEATURE_GATES:-}" ]]; then
     params+=" --feature-gates=${FEATURE_GATES}"
+  fi
+  if [[ -n "${SCHEDULING_ALGORITHM_PROVIDER:-}"  ]]; then
+    params+=" --algorithm-provider=${SCHEDULING_ALGORITHM_PROVIDER}"
   fi
   local -r kube_scheduler_docker_tag=$(cat "${KUBE_HOME}/kube-docker-files/kube-scheduler.docker_tag")
 
@@ -990,10 +1084,23 @@ function start-fluentd {
   fi
 }
 
+# Starts an image-puller - used in test clusters.
+function start-image-puller {
+  echo "Start image-puller"
+  cp "${KUBE_HOME}/kube-manifests/kubernetes/gci-trusty/e2e-image-puller.manifest" \
+    /etc/kubernetes/manifests/
+}
+
+# Starts kube-registry proxy
+function start-kube-registry-proxy {
+  echo "Start kube-registry-proxy"
+  cp "${KUBE_HOME}/kube-manifests/kubernetes/kube-registry-proxy.yaml" /etc/kubernetes/manifests
+}
+
 # Starts a l7 loadbalancing controller for ingress.
 function start-lb-controller {
   if [[ "${ENABLE_L7_LOADBALANCING:-}" == "glbc" ]]; then
-    echo "Starting GCE L7 pod"
+    echo "Start GCE L7 pod"
     prepare-log-file /var/log/glbc.log
     setup-addon-manifests "addons" "cluster-loadbalancing/glbc"
     cp "${KUBE_HOME}/kube-manifests/kubernetes/gci-trusty/glbc.manifest" \
@@ -1004,7 +1111,7 @@ function start-lb-controller {
 # Starts rescheduler.
 function start-rescheduler {
   if [[ "${ENABLE_RESCHEDULER:-}" == "true" ]]; then
-    echo "Starting Rescheduler"
+    echo "Start Rescheduler"
     prepare-log-file /var/log/rescheduler.log
     cp "${KUBE_HOME}/kube-manifests/kubernetes/gci-trusty/rescheduler.manifest" \
        /etc/kubernetes/manifests/
@@ -1013,7 +1120,7 @@ function start-rescheduler {
 
 function reset-motd {
   # kubelet is installed both on the master and nodes, and the version is easy to parse (unlike kubectl)
-  local -r version="$(/usr/bin/kubelet --version=true | cut -f2 -d " ")"
+  local -r version="$("${KUBE_HOME}"/bin/kubelet --version=true | cut -f2 -d " ")"
   # This logic grabs either a release tag (v1.2.1 or v1.2.1-alpha.1),
   # or the git hash that's in the build info.
   local gitref="$(echo "${version}" | sed -r "s/(v[0-9]+\.[0-9]+\.[0-9]+)(-[a-z]+\.[0-9]+)?.*/\1\2/g")"
@@ -1058,6 +1165,14 @@ if [[ ! -e "${KUBE_HOME}/kube-env" ]]; then
 fi
 
 source "${KUBE_HOME}/kube-env"
+
+if [[ -n "${KUBE_USER:-}" ]]; then
+  if ! [[ "${KUBE_USER}" =~ ^[-._@a-zA-Z0-9]+$ ]]; then
+    echo "Bad KUBE_USER format."
+    exit 1
+  fi
+fi
+
 config-ip-firewall
 create-dirs
 ensure-local-ssds
@@ -1090,8 +1205,11 @@ else
   start-kube-proxy
   # Kube-registry-proxy.
   if [[ "${ENABLE_CLUSTER_REGISTRY:-}" == "true" ]]; then
-    cp "${KUBE_HOME}/kube-manifests/kubernetes/kube-registry-proxy.yaml" /etc/kubernetes/manifests
-	fi
+    start-kube-registry-proxy
+  fi
+  if [[ "${PREPULL_E2E_IMAGES:-}" == "true" ]]; then
+    start-image-puller
+  fi
 fi
 start-fluentd
 reset-motd

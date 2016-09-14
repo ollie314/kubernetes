@@ -18,6 +18,11 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
+<strong>
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.4/docs/devel/local-cluster/local.md).
+
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
 </strong>
@@ -109,7 +114,7 @@ However you cannot view the nginx start page on localhost. To verify that nginx 
 You can control the specifications of a pod via a user defined manifest, and reach nginx through your browser on the port specified therein:
 
 ```shell
-cluster/kubectl.sh create -f docs/user-guide/pod.yaml
+cluster/kubectl.sh create -f test/fixtures/doc-yaml/user-guide/pod.yaml
 ```
 
 Congratulations!

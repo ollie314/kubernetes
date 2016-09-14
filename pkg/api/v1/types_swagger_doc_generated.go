@@ -69,6 +69,19 @@ func (AvoidPods) SwaggerDoc() map[string]string {
 	return map_AvoidPods
 }
 
+var map_AzureDiskVolumeSource = map[string]string{
+	"":            "AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.",
+	"diskName":    "The Name of the data disk in the blob storage",
+	"diskURI":     "The URI the data disk in the blob storage",
+	"cachingMode": "Host Caching mode: None, Read Only, Read Write.",
+	"fsType":      "Filesystem type to mount. Must be a filesystem type supported by the host operating system. Ex. \"ext4\", \"xfs\", \"ntfs\". Implicitly inferred to be \"ext4\" if unspecified.",
+	"readOnly":    "Defaults to false (read/write). ReadOnly here will force the ReadOnly setting in VolumeMounts.",
+}
+
+func (AzureDiskVolumeSource) SwaggerDoc() map[string]string {
+	return map_AzureDiskVolumeSource
+}
+
 var map_AzureFileVolumeSource = map[string]string{
 	"":           "AzureFile represents an Azure File Service mount on the host and bind mount to the pod.",
 	"secretName": "the name of secret that contains Azure Storage Account Name and Key",
@@ -424,7 +437,7 @@ func (EnvVar) SwaggerDoc() map[string]string {
 
 var map_EnvVarSource = map[string]string{
 	"":                 "EnvVarSource represents a source for the value of an EnvVar.",
-	"fieldRef":         "Selects a field of the pod; only name and namespace are supported.",
+	"fieldRef":         "Selects a field of the pod: supports metadata.name, metadata.namespace, metadata.labels, metadata.annotations, spec.nodeName, spec.serviceAccountName, status.podIP.",
 	"resourceFieldRef": "Selects a resource of the container: only resources limits and requests (limits.cpu, limits.memory, requests.cpu and requests.memory) are currently supported.",
 	"configMapKeyRef":  "Selects a key of a ConfigMap.",
 	"secretKeyRef":     "Selects a key of a secret in the pod's namespace",
@@ -492,7 +505,7 @@ func (ExportOptions) SwaggerDoc() map[string]string {
 
 var map_FCVolumeSource = map[string]string{
 	"":           "Represents a Fibre Channel volume. Fibre Channel volumes can only be mounted as read/write once. Fibre Channel volumes support ownership management and SELinux relabeling.",
-	"targetWWNs": "Required: FC target world wide names (WWNs)",
+	"targetWWNs": "Required: FC target worldwide names (WWNs)",
 	"lun":        "Required: FC target lun number",
 	"fsType":     "Filesystem type to mount. Must be a filesystem type supported by the host operating system. Ex. \"ext4\", \"xfs\", \"ntfs\". Implicitly inferred to be \"ext4\" if unspecified.",
 	"readOnly":   "Optional: Defaults to false (read/write). ReadOnly here will force the ReadOnly setting in VolumeMounts.",
@@ -503,7 +516,7 @@ func (FCVolumeSource) SwaggerDoc() map[string]string {
 }
 
 var map_FlexVolumeSource = map[string]string{
-	"":          "FlexVolume represents a generic volume resource that is provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.",
+	"":          "FlexVolume represents a generic volume resource that is provisioned/attached using an exec based plugin. This is an alpha feature and may change in future.",
 	"driver":    "Driver is the name of the driver to use for this volume.",
 	"fsType":    "Filesystem type to mount. Must be a filesystem type supported by the host operating system. Ex. \"ext4\", \"xfs\", \"ntfs\". The default filesystem depends on FlexVolume script.",
 	"secretRef": "Optional: SecretRef is reference to the secret object containing sensitive information to pass to the plugin scripts. This may be empty if no secret object is specified. If the secret object contains more than one secret, all secrets are passed to the plugin scripts.",
@@ -812,7 +825,7 @@ func (NodeAffinity) SwaggerDoc() map[string]string {
 }
 
 var map_NodeCondition = map[string]string{
-	"":                   "NodeCondition contains condition infromation for a node.",
+	"":                   "NodeCondition contains condition information for a node.",
 	"type":               "Type of node condition.",
 	"status":             "Status of the condition, one of True, False, Unknown.",
 	"lastHeartbeatTime":  "Last time we got an update on a given condition.",
@@ -956,6 +969,7 @@ var map_ObjectMeta = map[string]string{
 	"annotations":                "Annotations is an unstructured key value map stored with a resource that may be set by external tools to store and retrieve arbitrary metadata. They are not queryable and should be preserved when modifying objects. More info: http://releases.k8s.io/HEAD/docs/user-guide/annotations.md",
 	"ownerReferences":            "List of objects depended by this object. If ALL objects in the list have been deleted, this object will be garbage collected. If this object is managed by a controller, then an entry in this list will point to this controller, with the controller field set to true. There cannot be more than one managing controller.",
 	"finalizers":                 "Must be empty before the object is deleted from the registry. Each entry is an identifier for the responsible component that will remove the entry from the list. If the deletionTimestamp of the object is non-nil, entries in this list can only be removed.",
+	"clusterName":                "The name of the cluster which the object belongs to. This is used to distinguish resources with same name and namespace in different clusters. This field is not set anywhere right now and apiserver is going to ignore it if set in create or update request.",
 }
 
 func (ObjectMeta) SwaggerDoc() map[string]string {
@@ -1078,10 +1092,11 @@ var map_PersistentVolumeSource = map[string]string{
 	"cephfs":               "CephFS represents a Ceph FS mount on the host that shares a pod's lifetime",
 	"fc":                   "FC represents a Fibre Channel resource that is attached to a kubelet's host machine and then exposed to the pod.",
 	"flocker":              "Flocker represents a Flocker volume attached to a kubelet's host machine and exposed to the pod for its usage. This depends on the Flocker control service being running",
-	"flexVolume":           "FlexVolume represents a generic volume resource that is provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.",
+	"flexVolume":           "FlexVolume represents a generic volume resource that is provisioned/attached using an exec based plugin. This is an alpha feature and may change in future.",
 	"azureFile":            "AzureFile represents an Azure File Service mount on the host and bind mount to the pod.",
 	"vsphereVolume":        "VsphereVolume represents a vSphere volume attached and mounted on kubelets host machine",
 	"quobyte":              "Quobyte represents a Quobyte mount on the host that shares a pod's lifetime",
+	"azureDisk":            "AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.",
 }
 
 func (PersistentVolumeSource) SwaggerDoc() map[string]string {
@@ -1093,7 +1108,7 @@ var map_PersistentVolumeSpec = map[string]string{
 	"capacity":                      "A description of the persistent volume's resources and capacity. More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#capacity",
 	"accessModes":                   "AccessModes contains all ways the volume can be mounted. More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#access-modes",
 	"claimRef":                      "ClaimRef is part of a bi-directional binding between PersistentVolume and PersistentVolumeClaim. Expected to be non-nil when bound. claim.VolumeName is the authoritative bind between PV and PVC. More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#binding",
-	"persistentVolumeReclaimPolicy": "What happens to a persistent volume when released from its claim. Valid options are Retain (default) and Recycle. Recyling must be supported by the volume plugin underlying this persistent volume. More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#recycling-policy",
+	"persistentVolumeReclaimPolicy": "What happens to a persistent volume when released from its claim. Valid options are Retain (default) and Recycle. Recycling must be supported by the volume plugin underlying this persistent volume. More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#recycling-policy",
 }
 
 func (PersistentVolumeSpec) SwaggerDoc() map[string]string {
@@ -1452,6 +1467,7 @@ var map_ReplicationControllerStatus = map[string]string{
 	"":                     "ReplicationControllerStatus represents the current status of a replication controller.",
 	"replicas":             "Replicas is the most recently oberved number of replicas. More info: http://releases.k8s.io/HEAD/docs/user-guide/replication-controller.md#what-is-a-replication-controller",
 	"fullyLabeledReplicas": "The number of pods that have labels matching the labels of the pod template of the replication controller.",
+	"readyReplicas":        "The number of ready replicas for this replication controller.",
 	"observedGeneration":   "ObservedGeneration reflects the generation of the most recently observed replication controller.",
 }
 
@@ -1755,7 +1771,7 @@ var map_VolumeSource = map[string]string{
 	"glusterfs":             "Glusterfs represents a Glusterfs mount on the host that shares a pod's lifetime. More info: http://releases.k8s.io/HEAD/examples/volumes/glusterfs/README.md",
 	"persistentVolumeClaim": "PersistentVolumeClaimVolumeSource represents a reference to a PersistentVolumeClaim in the same namespace. More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#persistentvolumeclaims",
 	"rbd":           "RBD represents a Rados Block Device mount on the host that shares a pod's lifetime. More info: http://releases.k8s.io/HEAD/examples/volumes/rbd/README.md",
-	"flexVolume":    "FlexVolume represents a generic volume resource that is provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.",
+	"flexVolume":    "FlexVolume represents a generic volume resource that is provisioned/attached using an exec based plugin. This is an alpha feature and may change in future.",
 	"cinder":        "Cinder represents a cinder volume attached and mounted on kubelets host machine More info: http://releases.k8s.io/HEAD/examples/mysql-cinder-pd/README.md",
 	"cephfs":        "CephFS represents a Ceph FS mount on the host that shares a pod's lifetime",
 	"flocker":       "Flocker represents a Flocker volume attached to a kubelet's host machine. This depends on the Flocker control service being running",
@@ -1765,6 +1781,7 @@ var map_VolumeSource = map[string]string{
 	"configMap":     "ConfigMap represents a configMap that should populate this volume",
 	"vsphereVolume": "VsphereVolume represents a vSphere volume attached and mounted on kubelets host machine",
 	"quobyte":       "Quobyte represents a Quobyte mount on the host that shares a pod's lifetime",
+	"azureDisk":     "AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.",
 }
 
 func (VolumeSource) SwaggerDoc() map[string]string {

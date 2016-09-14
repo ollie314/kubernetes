@@ -38,7 +38,6 @@ var _ = framework.KubeDescribe("Resource-usage [Serial] [Slow]", func() {
 	)
 
 	var (
-		ns string
 		rc *ResourceCollector
 		om *framework.RuntimeOperationMonitor
 	)
@@ -46,13 +45,12 @@ var _ = framework.KubeDescribe("Resource-usage [Serial] [Slow]", func() {
 	f := framework.NewDefaultFramework("resource-usage")
 
 	BeforeEach(func() {
-		ns = f.Namespace.Name
 		om = framework.NewRuntimeOperationMonitor(f.Client)
 		// The test collects resource usage from a standalone Cadvisor pod.
 		// The Cadvsior of Kubelet has a housekeeping interval of 10s, which is too long to
 		// show the resource usage spikes. But changing its interval increases the overhead
 		// of kubelet. Hence we use a Cadvisor pod.
-		createCadvisorPod(f)
+		f.PodClient().CreateSync(getCadvisorPod())
 		rc = NewResourceCollector(containerStatsPollingPeriod)
 	})
 
@@ -69,7 +67,7 @@ var _ = framework.KubeDescribe("Resource-usage [Serial] [Slow]", func() {
 			{
 				podsNr: 10,
 				cpuLimits: framework.ContainersCPUSummary{
-					stats.SystemContainerKubelet: {0.50: 0.25, 0.95: 0.30},
+					stats.SystemContainerKubelet: {0.50: 0.30, 0.95: 0.35},
 					stats.SystemContainerRuntime: {0.50: 0.30, 0.95: 0.40},
 				},
 				memLimits: framework.ResourceUsagePerContainer{
@@ -83,9 +81,12 @@ var _ = framework.KubeDescribe("Resource-usage [Serial] [Slow]", func() {
 			itArg := testArg
 
 			It(fmt.Sprintf("resource tracking for %d pods per node", itArg.podsNr), func() {
+				testInfo := getTestNodeInfo(f, itArg.getTestName())
+
 				runResourceUsageTest(f, rc, itArg)
+
 				// Log and verify resource usage
-				logAndVerifyResource(f, rc, itArg.cpuLimits, itArg.memLimits, itArg.getTestName(), true)
+				logAndVerifyResource(f, rc, itArg.cpuLimits, itArg.memLimits, testInfo, true)
 			})
 		}
 	})
@@ -107,9 +108,12 @@ var _ = framework.KubeDescribe("Resource-usage [Serial] [Slow]", func() {
 			itArg := testArg
 
 			It(fmt.Sprintf("resource tracking for %d pods per node [Benchmark]", itArg.podsNr), func() {
+				testInfo := getTestNodeInfo(f, itArg.getTestName())
+
 				runResourceUsageTest(f, rc, itArg)
+
 				// Log and verify resource usage
-				logAndVerifyResource(f, rc, itArg.cpuLimits, itArg.memLimits, itArg.getTestName(), true)
+				logAndVerifyResource(f, rc, itArg.cpuLimits, itArg.memLimits, testInfo, false)
 			})
 		}
 	})
@@ -135,12 +139,14 @@ func runResourceUsageTest(f *framework.Framework, rc *ResourceCollector, testArg
 		// sleep for an interval here to measure steady data
 		sleepAfterCreatePods = 10 * time.Second
 	)
+	pods := newTestPods(testArg.podsNr, ImageRegistry[pauseImage], "test_pod")
 
 	rc.Start()
+	// Explicitly delete pods to prevent namespace controller cleanning up timeout
+	defer deletePodsSync(f, append(pods, getCadvisorPod()))
 	defer rc.Stop()
 
 	By("Creating a batch of Pods")
-	pods := newTestPods(testArg.podsNr, ImageRegistry[pauseImage], "test_pod")
 	f.PodClient().CreateBatch(pods)
 
 	// wait for a while to let the node be steady
@@ -174,7 +180,7 @@ func runResourceUsageTest(f *framework.Framework, rc *ResourceCollector, testArg
 
 // logAndVerifyResource prints the resource usage as perf data and verifies whether resource usage satisfies the limit.
 func logAndVerifyResource(f *framework.Framework, rc *ResourceCollector, cpuLimits framework.ContainersCPUSummary,
-	memLimits framework.ResourceUsagePerContainer, testName string, isVerify bool) {
+	memLimits framework.ResourceUsagePerContainer, testInfo map[string]string, isVerify bool) {
 	nodeName := framework.TestContext.NodeName
 
 	// Obtain memory PerfData
@@ -193,10 +199,8 @@ func logAndVerifyResource(f *framework.Framework, rc *ResourceCollector, cpuLimi
 	cpuSummaryPerNode[nodeName] = cpuSummary
 
 	// Print resource usage
-	framework.PrintPerfData(framework.ResourceUsageToPerfDataWithLabels(usagePerNode,
-		map[string]string{"test": testName, "node": nodeName}))
-	framework.PrintPerfData(framework.CPUUsageToPerfDataWithLabels(cpuSummaryPerNode,
-		map[string]string{"test": testName, "node": nodeName}))
+	framework.PrintPerfData(framework.ResourceUsageToPerfDataWithLabels(usagePerNode, testInfo))
+	framework.PrintPerfData(framework.CPUUsageToPerfDataWithLabels(cpuSummaryPerNode, testInfo))
 
 	// Verify resource usage
 	if isVerify {

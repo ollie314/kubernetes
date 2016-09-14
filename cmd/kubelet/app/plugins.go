@@ -29,6 +29,7 @@ import (
 	// Volume plugins
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/aws_ebs"
+	"k8s.io/kubernetes/pkg/volume/azure_dd"
 	"k8s.io/kubernetes/pkg/volume/azure_file"
 	"k8s.io/kubernetes/pkg/volume/cephfs"
 	"k8s.io/kubernetes/pkg/volume/cinder"
@@ -84,16 +85,21 @@ func ProbeVolumePlugins(pluginDir string) []volume.VolumePlugin {
 	allPlugins = append(allPlugins, azure_file.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, configmap.ProbeVolumePlugins()...)
 	allPlugins = append(allPlugins, vsphere_volume.ProbeVolumePlugins()...)
+	allPlugins = append(allPlugins, azure_dd.ProbeVolumePlugins()...)
 	return allPlugins
 }
 
 // ProbeNetworkPlugins collects all compiled-in plugins
-func ProbeNetworkPlugins(pluginDir string) []network.NetworkPlugin {
+func ProbeNetworkPlugins(pluginDir, cniConfDir, cniBinDir string) []network.NetworkPlugin {
 	allPlugins := []network.NetworkPlugin{}
 
+	// for backwards-compat, allow pluginDir as a source of CNI config files
+	if cniConfDir == "" {
+		cniConfDir = pluginDir
+	}
 	// for each existing plugin, add to the list
 	allPlugins = append(allPlugins, exec.ProbeNetworkPlugins(pluginDir)...)
-	allPlugins = append(allPlugins, cni.ProbeNetworkPlugins(pluginDir)...)
+	allPlugins = append(allPlugins, cni.ProbeNetworkPlugins(cniConfDir, cniBinDir)...)
 	allPlugins = append(allPlugins, kubenet.NewPlugin(pluginDir))
 
 	return allPlugins

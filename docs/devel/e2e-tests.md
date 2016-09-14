@@ -21,7 +21,7 @@ refer to the docs that go with that version.
 <!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.3/docs/devel/e2e-tests.md).
+[here](http://releases.k8s.io/release-1.4/docs/devel/e2e-tests.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -123,9 +123,6 @@ go run hack/e2e.go -v --build
 
 # Create a fresh cluster.  Deletes a cluster first, if it exists
 go run hack/e2e.go -v --up
-
-# Test if a cluster is up.
-go run hack/e2e.go -v --isup
 
 # Push code to an existing cluster
 go run hack/e2e.go -v --push
@@ -398,13 +395,13 @@ at a custom host directly:
 
 ```sh
 export KUBECONFIG=/path/to/kubeconfig
-go run hack/e2e.go -v --test --check_node_count=false --test_args="--host=http://127.0.0.1:8080"
+go run hack/e2e.go -v --test --check_node_count=false
 ```
 
 To control the tests that are run:
 
 ```sh
-go run hack/e2e.go -v --test --check_node_count=false --test_args="--host=http://127.0.0.1:8080" --ginkgo.focus="Secrets"
+go run hack/e2e.go -v --test --check_node_count=false --test_args="--ginkgo.focus="Secrets"
 ```
 
 ### Version-skewed and upgrade testing

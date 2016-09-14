@@ -40,7 +40,7 @@ func NewREST(opts generic.RESTOptions) (*REST, *StatusREST, *ApprovalREST) {
 	prefix := "/" + opts.ResourcePrefix
 
 	newListFunc := func() runtime.Object { return &certificates.CertificateSigningRequestList{} }
-	storageInterface := opts.Decorator(
+	storageInterface, _ := opts.Decorator(
 		opts.StorageConfig,
 		cachesize.GetWatchCacheSizeByResource(cachesize.CertificateSigningRequests),
 		&certificates.CertificateSigningRequest{},
@@ -62,7 +62,7 @@ func NewREST(opts generic.RESTOptions) (*REST, *StatusREST, *ApprovalREST) {
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
 			return obj.(*certificates.CertificateSigningRequest).Name, nil
 		},
-		PredicateFunc: func(label labels.Selector, field fields.Selector) generic.Matcher {
+		PredicateFunc: func(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
 			return csrregistry.Matcher(label, field)
 		},
 		QualifiedResource:       certificates.Resource("certificatesigningrequests"),

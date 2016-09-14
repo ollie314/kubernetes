@@ -73,7 +73,7 @@ func density30AddonResourceVerifier(numNodes int) map[string]framework.ResourceC
 	framework.Logf("Setting resource constraings for provider: %s", framework.TestContext.Provider)
 	if framework.ProviderIs("kubemark") {
 		if numNodes <= 5 {
-			apiserverCPU = 0.15
+			apiserverCPU = 0.35
 			apiserverMem = 150 * (1024 * 1024)
 			controllerCPU = 0.1
 			controllerMem = 100 * (1024 * 1024)
@@ -87,11 +87,11 @@ func density30AddonResourceVerifier(numNodes int) map[string]framework.ResourceC
 			schedulerCPU = 0.75
 			schedulerMem = 500 * (1024 * 1024)
 		} else if numNodes <= 500 {
-			apiserverCPU = 2.25
-			apiserverMem = 2500 * (1024 * 1024)
-			controllerCPU = 1.0
+			apiserverCPU = 2.5
+			apiserverMem = 3400 * (1024 * 1024)
+			controllerCPU = 1.3
 			controllerMem = 1100 * (1024 * 1024)
-			schedulerCPU = 0.8
+			schedulerCPU = 1.5
 			schedulerMem = 500 * (1024 * 1024)
 		} else if numNodes <= 1000 {
 			apiserverCPU = 4
@@ -103,8 +103,10 @@ func density30AddonResourceVerifier(numNodes int) map[string]framework.ResourceC
 		}
 	} else {
 		if numNodes <= 100 {
-			apiserverCPU = 1.5
-			apiserverMem = 1300 * (1024 * 1024)
+			// TODO: Investigate higher apiserver consumption and
+			// potentially revert to 1.5cpu and 1.3GB - see #30871
+			apiserverCPU = 1.8
+			apiserverMem = 2200 * (1024 * 1024)
 			controllerCPU = 0.5
 			controllerMem = 300 * (1024 * 1024)
 			schedulerCPU = 0.4
@@ -131,11 +133,11 @@ func density30AddonResourceVerifier(numNodes int) map[string]framework.ResourceC
 		MemoryConstraint: 100 * (1024 * 1024),
 	}
 	constraints["kube-proxy"] = framework.ResourceConstraint{
-		CPUConstraint:    0.05,
+		CPUConstraint:    0.1,
 		MemoryConstraint: 20 * (1024 * 1024),
 	}
 	constraints["l7-lb-controller"] = framework.ResourceConstraint{
-		CPUConstraint:    0.1,
+		CPUConstraint:    0.15,
 		MemoryConstraint: 60 * (1024 * 1024),
 	}
 	constraints["influxdb"] = framework.ResourceConstraint{
@@ -659,15 +661,15 @@ var _ = framework.KubeDescribe("Density", func() {
 				framework.ExpectNoError(framework.VerifyPodStartupLatency(podStartupLatency))
 
 				framework.LogSuspiciousLatency(startupLag, e2eLag, nodeCount, c)
+
+				By("Removing additional replication controllers")
+				for i := 1; i <= nodeCount; i++ {
+					name := additionalPodsPrefix + "-" + strconv.Itoa(i)
+					c.ReplicationControllers(ns).Delete(name, nil)
+				}
 			}
 
 			cleanupDensityTest(dConfig)
-
-			By("Removing additional replication controllers if any")
-			for i := 1; i <= nodeCount; i++ {
-				name := additionalPodsPrefix + "-" + strconv.Itoa(i)
-				c.ReplicationControllers(ns).Delete(name, nil)
-			}
 		})
 	}
 
@@ -691,7 +693,7 @@ var _ = framework.KubeDescribe("Density", func() {
 			}
 			RCName = "density" + strconv.Itoa(totalPods) + "-" + strconv.Itoa(i) + "-" + uuid
 			RCConfigs[i] = framework.RCConfig{Client: c,
-				Image:                "gcr.io/google_containers/pause-amd64:3.0",
+				Image:                framework.GetPauseImageName(f.Client),
 				Name:                 RCName,
 				Namespace:            ns,
 				Labels:               map[string]string{"type": "densityPod"},

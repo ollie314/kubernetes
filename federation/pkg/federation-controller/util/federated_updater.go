@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"time"
 
-	federation_release_1_4 "k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_4"
+	kube_release_1_4 "k8s.io/kubernetes/pkg/client/clientset_generated/release_1_4"
 	pkg_runtime "k8s.io/kubernetes/pkg/runtime"
 )
 
@@ -47,10 +47,12 @@ type FederatedUpdater interface {
 	// stopped when it is reached. However the function will return after the timeout
 	// with a non-nil error.
 	Update([]FederatedOperation, time.Duration) error
+
+	UpdateWithOnError([]FederatedOperation, time.Duration, func(FederatedOperation, error)) error
 }
 
 // A function that executes some operation using the passed client and object.
-type FederatedOperationHandler func(federation_release_1_4.Interface, pkg_runtime.Object) error
+type FederatedOperationHandler func(kube_release_1_4.Interface, pkg_runtime.Object) error
 
 type federatedUpdaterImpl struct {
 	federation FederationView
@@ -70,6 +72,10 @@ func NewFederatedUpdater(federation FederationView, add, update, del FederatedOp
 }
 
 func (fu *federatedUpdaterImpl) Update(ops []FederatedOperation, timeout time.Duration) error {
+	return fu.UpdateWithOnError(ops, timeout, nil)
+}
+
+func (fu *federatedUpdaterImpl) UpdateWithOnError(ops []FederatedOperation, timeout time.Duration, onError func(FederatedOperation, error)) error {
 	done := make(chan error, len(ops))
 	for _, op := range ops {
 		go func(op FederatedOperation) {
@@ -89,6 +95,9 @@ func (fu *federatedUpdaterImpl) Update(ops []FederatedOperation, timeout time.Du
 				err = fu.updateFunction(clientset, op.Obj)
 			case OperationTypeDelete:
 				err = fu.deleteFunction(clientset, op.Obj)
+			}
+			if err != nil && onError != nil {
+				onError(op, err)
 			}
 			done <- err
 		}(op)

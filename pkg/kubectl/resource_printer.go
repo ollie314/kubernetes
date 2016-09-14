@@ -42,6 +42,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/certificates"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/apis/rbac"
+	"k8s.io/kubernetes/pkg/apis/storage"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
@@ -149,7 +150,7 @@ type ResourcePrinter interface {
 	HandledResources() []string
 	//Can be used to print out warning/clarifications if needed
 	//after all objects were printed
-	FinishPrint(io.Writer, string) error
+	AfterPrint(io.Writer, string) error
 }
 
 // ResourcePrinterFunc is a function that can print objects
@@ -165,7 +166,7 @@ func (fn ResourcePrinterFunc) HandledResources() []string {
 	return []string{}
 }
 
-func (fn ResourcePrinterFunc) FinishPrint(io.Writer, string) error {
+func (fn ResourcePrinterFunc) AfterPrint(io.Writer, string) error {
 	return nil
 }
 
@@ -186,7 +187,7 @@ func NewVersionedPrinter(printer ResourcePrinter, converter runtime.ObjectConver
 	}
 }
 
-func (p *VersionedPrinter) FinishPrint(w io.Writer, res string) error {
+func (p *VersionedPrinter) AfterPrint(w io.Writer, res string) error {
 	return nil
 }
 
@@ -213,7 +214,7 @@ type NamePrinter struct {
 	Typer   runtime.ObjectTyper
 }
 
-func (p *NamePrinter) FinishPrint(w io.Writer, res string) error {
+func (p *NamePrinter) AfterPrint(w io.Writer, res string) error {
 	return nil
 }
 
@@ -265,7 +266,7 @@ func (p *NamePrinter) HandledResources() []string {
 type JSONPrinter struct {
 }
 
-func (p *JSONPrinter) FinishPrint(w io.Writer, res string) error {
+func (p *JSONPrinter) AfterPrint(w io.Writer, res string) error {
 	return nil
 }
 
@@ -299,7 +300,7 @@ type YAMLPrinter struct {
 	converter runtime.ObjectConvertor
 }
 
-func (p *YAMLPrinter) FinishPrint(w io.Writer, res string) error {
+func (p *YAMLPrinter) AfterPrint(w io.Writer, res string) error {
 	return nil
 }
 
@@ -446,9 +447,9 @@ func (h *HumanReadablePrinter) HandledResources() []string {
 	return keys
 }
 
-func (h *HumanReadablePrinter) FinishPrint(output io.Writer, res string) error {
+func (h *HumanReadablePrinter) AfterPrint(output io.Writer, res string) error {
 	if !h.options.NoHeaders && !h.options.ShowAll && h.hiddenObjNum > 0 {
-		_, err := fmt.Fprintf(output, "  info: %d completed object(s) was(were) not shown in %s list. Pass --show-all to see all objects.\n\n", h.hiddenObjNum, res)
+		_, err := fmt.Fprintf(output, "\ninfo: %d completed %s were not shown in the list. Pass --show-all to see all.\n\n", h.hiddenObjNum, res)
 		return err
 	}
 	return nil
@@ -458,8 +459,8 @@ func (h *HumanReadablePrinter) FinishPrint(output io.Writer, res string) error {
 // pkg/kubectl/cmd/get.go to reflect the new resource type.
 var podColumns = []string{"NAME", "READY", "STATUS", "RESTARTS", "AGE"}
 var podTemplateColumns = []string{"TEMPLATE", "CONTAINER(S)", "IMAGE(S)", "PODLABELS"}
-var replicationControllerColumns = []string{"NAME", "DESIRED", "CURRENT", "AGE"}
-var replicaSetColumns = []string{"NAME", "DESIRED", "CURRENT", "AGE"}
+var replicationControllerColumns = []string{"NAME", "DESIRED", "CURRENT", "READY", "AGE"}
+var replicaSetColumns = []string{"NAME", "DESIRED", "CURRENT", "READY", "AGE"}
 var jobColumns = []string{"NAME", "DESIRED", "SUCCESSFUL", "AGE"}
 var scheduledJobColumns = []string{"NAME", "SCHEDULE", "SUSPEND", "ACTIVE", "LAST-SCHEDULE"}
 var serviceColumns = []string{"NAME", "CLUSTER-IP", "EXTERNAL-IP", "PORT(S)", "AGE"}
@@ -474,7 +475,7 @@ var resourceQuotaColumns = []string{"NAME", "AGE"}
 var namespaceColumns = []string{"NAME", "STATUS", "AGE"}
 var secretColumns = []string{"NAME", "TYPE", "DATA", "AGE"}
 var serviceAccountColumns = []string{"NAME", "SECRETS", "AGE"}
-var persistentVolumeColumns = []string{"NAME", "CAPACITY", "ACCESSMODES", "STATUS", "CLAIM", "REASON", "AGE"}
+var persistentVolumeColumns = []string{"NAME", "CAPACITY", "ACCESSMODES", "RECLAIMPOLICY", "STATUS", "CLAIM", "REASON", "AGE"}
 var persistentVolumeClaimColumns = []string{"NAME", "STATUS", "VOLUME", "CAPACITY", "ACCESSMODES", "AGE"}
 var componentStatusColumns = []string{"NAME", "STATUS", "MESSAGE", "ERROR"}
 var thirdPartyResourceColumns = []string{"NAME", "DESCRIPTION", "VERSION(S)"}
@@ -491,7 +492,7 @@ var withNamespacePrefixColumns = []string{"NAMESPACE"} // TODO(erictune): print 
 var deploymentColumns = []string{"NAME", "DESIRED", "CURRENT", "UP-TO-DATE", "AVAILABLE", "AGE"}
 var configMapColumns = []string{"NAME", "DATA", "AGE"}
 var podSecurityPolicyColumns = []string{"NAME", "PRIV", "CAPS", "VOLUMEPLUGINS", "SELINUX", "RUNASUSER"}
-var clusterColumns = []string{"NAME", "STATUS", "VERSION", "AGE"}
+var clusterColumns = []string{"NAME", "STATUS", "AGE"}
 var networkPolicyColumns = []string{"NAME", "POD-SELECTOR", "AGE"}
 var certificateSigningRequestColumns = []string{"NAME", "AGE", "REQUESTOR", "CONDITION"}
 
@@ -834,10 +835,12 @@ func printReplicationController(controller *api.ReplicationController, w io.Writ
 
 	desiredReplicas := controller.Spec.Replicas
 	currentReplicas := controller.Status.Replicas
-	if _, err := fmt.Fprintf(w, "%s\t%d\t%d\t%s",
+	readyReplicas := controller.Status.ReadyReplicas
+	if _, err := fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%s",
 		name,
 		desiredReplicas,
 		currentReplicas,
+		readyReplicas,
 		translateTimestamp(controller.CreationTimestamp),
 	); err != nil {
 		return err
@@ -884,10 +887,12 @@ func printReplicaSet(rs *extensions.ReplicaSet, w io.Writer, options PrintOption
 
 	desiredReplicas := rs.Spec.Replicas
 	currentReplicas := rs.Status.Replicas
-	if _, err := fmt.Fprintf(w, "%s\t%d\t%d\t%s",
+	readyReplicas := rs.Status.ReadyReplicas
+	if _, err := fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%s",
 		name,
 		desiredReplicas,
 		currentReplicas,
+		readyReplicas,
 		translateTimestamp(rs.CreationTimestamp),
 	); err != nil {
 		return err
@@ -1092,6 +1097,8 @@ func getServiceExternalIP(svc *api.Service, wide bool) string {
 			return lbIps
 		}
 		return "<pending>"
+	case api.ServiceTypeExternalName:
+		return svc.Spec.ExternalName
 	}
 	return "<unknown>"
 }
@@ -1507,13 +1514,14 @@ func printPersistentVolume(pv *api.PersistentVolume, w io.Writer, options PrintO
 	}
 
 	modesStr := api.GetAccessModesAsString(pv.Spec.AccessModes)
+	reclaimPolicyStr := string(pv.Spec.PersistentVolumeReclaimPolicy)
 
 	aQty := pv.Spec.Capacity[api.ResourceStorage]
 	aSize := aQty.String()
 
-	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s",
+	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
 		name,
-		aSize, modesStr,
+		aSize, modesStr, reclaimPolicyStr,
 		pv.Status.Phase,
 		claimRefUID,
 		pv.Status.Reason,
@@ -1772,7 +1780,7 @@ func extractCSRStatus(csr *certificates.CertificateSigningRequest) (string, erro
 		case certificates.CertificateDenied:
 			denied = true
 		default:
-			return "", fmt.Errorf("unknown csr conditon %q", c)
+			return "", fmt.Errorf("unknown csr condition %q", c)
 		}
 	}
 	var status string
@@ -2061,7 +2069,7 @@ func printNetworkPolicyList(list *extensions.NetworkPolicyList, w io.Writer, opt
 	return nil
 }
 
-func printStorageClass(sc *extensions.StorageClass, w io.Writer, options PrintOptions) error {
+func printStorageClass(sc *storage.StorageClass, w io.Writer, options PrintOptions) error {
 	name := sc.Name
 	provtype := sc.Provisioner
 
@@ -2078,7 +2086,7 @@ func printStorageClass(sc *extensions.StorageClass, w io.Writer, options PrintOp
 	return nil
 }
 
-func printStorageClassList(scList *extensions.StorageClassList, w io.Writer, options PrintOptions) error {
+func printStorageClassList(scList *storage.StorageClassList, w io.Writer, options PrintOptions) error {
 	for _, sc := range scList.Items {
 		if err := printStorageClass(&sc, w, options); err != nil {
 			return err
@@ -2248,7 +2256,7 @@ func NewTemplatePrinter(tmpl []byte) (*TemplatePrinter, error) {
 	}, nil
 }
 
-func (p *TemplatePrinter) FinishPrint(w io.Writer, res string) error {
+func (p *TemplatePrinter) AfterPrint(w io.Writer, res string) error {
 	return nil
 }
 
@@ -2399,7 +2407,7 @@ func NewJSONPathPrinter(tmpl string) (*JSONPathPrinter, error) {
 	return &JSONPathPrinter{tmpl, j}, nil
 }
 
-func (j *JSONPathPrinter) FinishPrint(w io.Writer, res string) error {
+func (j *JSONPathPrinter) AfterPrint(w io.Writer, res string) error {
 	return nil
 }
 

@@ -18,6 +18,7 @@ package dockertools
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,9 +77,10 @@ const (
 	// docker version should be at least 1.9.x
 	minimumDockerAPIVersion = "1.21"
 
-	// Remote API version for docker daemon version v1.10
+	// Remote API version for docker daemon versions
 	// https://docs.docker.com/engine/reference/api/docker_remote_api/
 	dockerV110APIVersion = "1.22"
+	DockerV112APIVersion = "1.24"
 
 	// ndots specifies the minimum number of dots that a domain name must contain for the resolver to consider it as FQDN (fully-qualified)
 	// we want to able to consider SRV lookup names like _dns._udp.kube-dns.default.svc to be considered relative.
@@ -110,7 +112,7 @@ var (
 	podInfraContainerImagePullPolicy = api.PullIfNotPresent
 
 	// Default set of seccomp security options.
-	defaultSeccompOpt = []dockerOpt{{"seccomp", "unconfined"}}
+	defaultSeccompOpt = []dockerOpt{{"seccomp", "unconfined", ""}}
 )
 
 type DockerManager struct {
@@ -578,6 +580,10 @@ func (dm *DockerManager) runContainer(
 	if err != nil {
 		return kubecontainer.ContainerID{}, err
 	}
+	fmtSecurityOpts, err := dm.fmtDockerOpts(securityOpts)
+	if err != nil {
+		return kubecontainer.ContainerID{}, err
+	}
 
 	// Pod information is recorded on the container as labels to preserve it in the event the pod is deleted
 	// while the Kubelet is down and there is no information available to recover the pod.
@@ -657,7 +663,23 @@ func (dm *DockerManager) runContainer(
 			CPUShares:  cpuShares,
 			Devices:    devices,
 		},
-		SecurityOpt: securityOpts,
+		SecurityOpt: fmtSecurityOpts,
+	}
+
+	// Set sysctls if requested
+	sysctls, unsafeSysctls, err := api.SysctlsFromPodAnnotations(pod.Annotations)
+	if err != nil {
+		dm.recorder.Eventf(ref, api.EventTypeWarning, events.FailedToCreateContainer, "Failed to create docker container %q of pod %q with error: %v", container.Name, format.Pod(pod), err)
+		return kubecontainer.ContainerID{}, err
+	}
+	if len(sysctls)+len(unsafeSysctls) > 0 {
+		hc.Sysctls = make(map[string]string, len(sysctls)+len(unsafeSysctls))
+		for _, c := range sysctls {
+			hc.Sysctls[c.Name] = c.Value
+		}
+		for _, c := range unsafeSysctls {
+			hc.Sysctls[c.Name] = c.Value
+		}
 	}
 
 	// If current api version is newer than docker 1.10 requested, set OomScoreAdj to HostConfig
@@ -716,7 +738,21 @@ func (dm *DockerManager) runContainer(
 	if len(createResp.Warnings) != 0 {
 		glog.V(2).Infof("Container %q of pod %q created with warnings: %v", container.Name, format.Pod(pod), createResp.Warnings)
 	}
-	dm.recorder.Eventf(ref, api.EventTypeNormal, events.CreatedContainer, "Created container with docker id %v", utilstrings.ShortenString(createResp.ID, 12))
+
+	createdEventMsg := fmt.Sprintf("Created container with docker id %v", utilstrings.ShortenString(createResp.ID, 12))
+	if len(securityOpts) > 0 {
+		var msgs []string
+		for _, opt := range securityOpts {
+			glog.Errorf("Logging security options: %+v", opt)
+			msg := opt.msg
+			if msg == "" {
+				msg = opt.value
+			}
+			msgs = append(msgs, fmt.Sprintf("%s=%s", opt.key, truncateMsg(msg, 256)))
+		}
+		createdEventMsg = fmt.Sprintf("%s; Security:[%s]", createdEventMsg, strings.Join(msgs, " "))
+	}
+	dm.recorder.Eventf(ref, api.EventTypeNormal, events.CreatedContainer, createdEventMsg)
 
 	if err = dm.client.StartContainer(createResp.ID); err != nil {
 		dm.recorder.Eventf(ref, api.EventTypeWarning, events.FailedToStartContainer,
@@ -1039,23 +1075,10 @@ func (dm *DockerManager) checkVersionCompatibility() error {
 	return nil
 }
 
-func (dm *DockerManager) getSecurityOpts(pod *api.Pod, ctrName string) ([]string, error) {
+func (dm *DockerManager) fmtDockerOpts(opts []dockerOpt) ([]string, error) {
 	version, err := dm.APIVersion()
 	if err != nil {
 		return nil, err
-	}
-
-	var securityOpts []dockerOpt
-	if seccompOpts, err := dm.getSeccompOpts(pod, ctrName, version); err != nil {
-		return nil, err
-	} else {
-		securityOpts = append(securityOpts, seccompOpts...)
-	}
-
-	if appArmorOpts, err := dm.getAppArmorOpts(pod, ctrName); err != nil {
-		return nil, err
-	} else {
-		securityOpts = append(securityOpts, appArmorOpts...)
 	}
 
 	const (
@@ -1072,19 +1095,44 @@ func (dm *DockerManager) getSecurityOpts(pod *api.Pod, ctrName string) ([]string
 		sep = optSeparatorOld
 	}
 
-	opts := make([]string, len(securityOpts))
-	for i, opt := range securityOpts {
-		opts[i] = fmt.Sprintf("%s%c%s", opt.key, sep, opt.value)
+	fmtOpts := make([]string, len(opts))
+	for i, opt := range opts {
+		fmtOpts[i] = fmt.Sprintf("%s%c%s", opt.key, sep, opt.value)
 	}
-	return opts, nil
+	return fmtOpts, nil
+}
+
+func (dm *DockerManager) getSecurityOpts(pod *api.Pod, ctrName string) ([]dockerOpt, error) {
+	var securityOpts []dockerOpt
+	if seccompOpts, err := dm.getSeccompOpts(pod, ctrName); err != nil {
+		return nil, err
+	} else {
+		securityOpts = append(securityOpts, seccompOpts...)
+	}
+
+	if appArmorOpts, err := dm.getAppArmorOpts(pod, ctrName); err != nil {
+		return nil, err
+	} else {
+		securityOpts = append(securityOpts, appArmorOpts...)
+	}
+
+	return securityOpts, nil
 }
 
 type dockerOpt struct {
+	// The key-value pair passed to docker.
 	key, value string
+	// The alternative value to use in log/event messages.
+	msg string
 }
 
 // Get the docker security options for seccomp.
-func (dm *DockerManager) getSeccompOpts(pod *api.Pod, ctrName string, version kubecontainer.Version) ([]dockerOpt, error) {
+func (dm *DockerManager) getSeccompOpts(pod *api.Pod, ctrName string) ([]dockerOpt, error) {
+	version, err := dm.APIVersion()
+	if err != nil {
+		return nil, err
+	}
+
 	// seccomp is only on docker versions >= v1.10
 	if result, err := version.Compare(dockerV110APIVersion); err != nil {
 		return nil, err
@@ -1127,8 +1175,10 @@ func (dm *DockerManager) getSeccompOpts(pod *api.Pod, ctrName string, version ku
 	if err := json.Compact(b, file); err != nil {
 		return nil, err
 	}
+	// Rather than the full profile, just put the filename & md5sum in the event log.
+	msg := fmt.Sprintf("%s(md5:%x)", name, md5.Sum(file))
 
-	return []dockerOpt{{"seccomp", b.String()}}, nil
+	return []dockerOpt{{"seccomp", b.String(), msg}}, nil
 }
 
 // Get the docker security options for AppArmor.
@@ -1141,7 +1191,7 @@ func (dm *DockerManager) getAppArmorOpts(pod *api.Pod, ctrName string) ([]docker
 
 	// Assume validation has already happened.
 	profileName := strings.TrimPrefix(profile, apparmor.ProfileNamePrefix)
-	return []dockerOpt{{"apparmor", profileName}}, nil
+	return []dockerOpt{{"apparmor", profileName, ""}}, nil
 }
 
 type dockerExitError struct {
@@ -1455,7 +1505,7 @@ func (dm *DockerManager) killContainer(containerID kubecontainer.ContainerID, co
 		}()
 		select {
 		case <-time.After(time.Duration(gracePeriod) * time.Second):
-			glog.V(2).Infof("preStop hook for container %q did not complete in %d seconds", name, gracePeriod)
+			glog.Warningf("preStop hook for container %q did not complete in %d seconds", name, gracePeriod)
 		case <-done:
 			glog.V(4).Infof("preStop hook for container %q completed", name)
 		}
@@ -1480,7 +1530,7 @@ func (dm *DockerManager) killContainer(containerID kubecontainer.ContainerID, co
 	if err == nil {
 		glog.V(2).Infof("Container %q exited after %s", name, unversioned.Now().Sub(start.Time))
 	} else {
-		glog.V(2).Infof("Container %q termination failed after %s: %v", name, unversioned.Now().Sub(start.Time), err)
+		glog.Warningf("Container %q termination failed after %s: %v", name, unversioned.Now().Sub(start.Time), err)
 	}
 	ref, ok := dm.containerRefManager.GetRef(containerID)
 	if !ok {
@@ -2109,7 +2159,7 @@ func (dm *DockerManager) SyncPod(pod *api.Pod, _ api.PodStatus, podStatus *kubec
 				result.Fail(err)
 				return
 			}
-			glog.V(4).Infof("Determined pod ip after infra change: %q: %q", format.Pod(pod), podIP)
+			glog.Infof("Determined pod ip after infra change: %q: %q", format.Pod(pod), podIP)
 		}
 	}
 
@@ -2539,4 +2589,16 @@ func (dm *DockerManager) getVersionInfo() (versionInfo, error) {
 		apiVersion:    apiVersion,
 		daemonVersion: daemonVersion,
 	}, nil
+}
+
+// Truncate the message if it exceeds max length.
+func truncateMsg(msg string, max int) string {
+	if len(msg) <= max {
+		return msg
+	}
+	glog.V(2).Infof("Truncated %s", msg)
+	const truncatedMsg = "..TRUNCATED.."
+	begin := (max - len(truncatedMsg)) / 2
+	end := len(msg) - (max - (len(truncatedMsg) + begin))
+	return msg[:begin] + truncatedMsg + msg[end:]
 }

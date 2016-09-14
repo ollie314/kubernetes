@@ -77,14 +77,18 @@ var _ = framework.KubeDescribe("Loadbalancing: L7 [Feature:Ingress]", func() {
 	//
 	// Slow by design ~10m for each "It" block dominated by loadbalancer setup time
 	// TODO: write similar tests for nginx, haproxy and AWS Ingress.
-	framework.KubeDescribe("GCE [Feature: Ingress]", func() {
+	framework.KubeDescribe("GCE [Slow] [Feature: Ingress]", func() {
 		var gceController *GCEIngressController
 
 		// Platform specific setup
 		BeforeEach(func() {
 			framework.SkipUnlessProviderIs("gce", "gke")
 			By("Initializing gce controller")
-			gceController = &GCEIngressController{ns: ns, Project: framework.TestContext.CloudConfig.ProjectID, c: jig.client}
+			gceController = &GCEIngressController{
+				ns:    ns,
+				c:     jig.client,
+				cloud: framework.TestContext.CloudConfig,
+			}
 			gceController.init()
 		})
 
@@ -125,10 +129,10 @@ var _ = framework.KubeDescribe("Loadbalancing: L7 [Feature:Ingress]", func() {
 
 			By("waiting for Ingress to come up with ip: " + ip)
 			httpClient := buildInsecureClient(reqTimeout)
-			ExpectNoError(jig.pollURL(fmt.Sprintf("https://%v/", ip), "", lbPollTimeout, httpClient, false))
+			ExpectNoError(pollURL(fmt.Sprintf("https://%v/", ip), "", lbPollTimeout, httpClient, false))
 
 			By("should reject HTTP traffic")
-			ExpectNoError(jig.pollURL(fmt.Sprintf("http://%v/", ip), "", lbPollTimeout, httpClient, true))
+			ExpectNoError(pollURL(fmt.Sprintf("http://%v/", ip), "", lbPollTimeout, httpClient, true))
 
 			// TODO: uncomment the restart test once we have a way to synchronize
 			// and know that the controller has resumed watching. If we delete
@@ -143,5 +147,53 @@ var _ = framework.KubeDescribe("Loadbalancing: L7 [Feature:Ingress]", func() {
 
 		// TODO: Implement a multizone e2e that verifies traffic reaches each
 		// zone based on pod labels.
+	})
+
+	// Time: borderline 5m, slow by design
+	framework.KubeDescribe("Nginx [Slow]", func() {
+		var nginxController *NginxIngressController
+
+		BeforeEach(func() {
+			framework.SkipUnlessProviderIs("gce", "gke")
+			By("Initializing nginx controller")
+			jig.class = "nginx"
+			nginxController = &NginxIngressController{ns: ns, c: jig.client}
+
+			// TODO: This test may fail on other platforms. We can simply skip it
+			// but we want to allow easy testing where a user might've hand
+			// configured firewalls.
+			if framework.ProviderIs("gce", "gke") {
+				ExpectNoError(gcloudCreate("firewall-rules", fmt.Sprintf("ingress-80-443-%v", ns), framework.TestContext.CloudConfig.ProjectID, "--allow", "tcp:80,tcp:443", "--network", framework.TestContext.CloudConfig.Network))
+			} else {
+				framework.Logf("WARNING: Not running on GCE/GKE, cannot create firewall rules for :80, :443. Assuming traffic can reach the external ips of all nodes in cluster on those ports.")
+			}
+
+			nginxController.init()
+		})
+
+		AfterEach(func() {
+			if framework.ProviderIs("gce", "gke") {
+				ExpectNoError(gcloudDelete("firewall-rules", fmt.Sprintf("ingress-80-443-%v", ns), framework.TestContext.CloudConfig.ProjectID))
+			}
+			if CurrentGinkgoTestDescription().Failed {
+				describeIng(ns)
+			}
+			if jig.ing == nil {
+				By("No ingress created, no cleanup necessary")
+				return
+			}
+			By("Deleting ingress")
+			jig.deleteIngress()
+		})
+
+		It("should conform to Ingress spec", func() {
+			conformanceTests = createComformanceTests(jig, ns)
+			for _, t := range conformanceTests {
+				By(t.entryLog)
+				t.execute()
+				By(t.exitLog)
+				jig.waitForIngress()
+			}
+		})
 	})
 })

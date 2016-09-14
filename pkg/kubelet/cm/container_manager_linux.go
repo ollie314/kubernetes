@@ -270,9 +270,11 @@ func setupKernelTunables(option KernelTunableBehavior) error {
 		utilsysctl.KernelPanicOnOops:  utilsysctl.KernelPanicOnOopsAlways,
 	}
 
+	sysctl := utilsysctl.New()
+
 	errList := []error{}
 	for flag, expectedValue := range desiredState {
-		val, err := utilsysctl.GetSysctl(flag)
+		val, err := sysctl.GetSysctl(flag)
 		if err != nil {
 			errList = append(errList, err)
 			continue
@@ -288,7 +290,7 @@ func setupKernelTunables(option KernelTunableBehavior) error {
 			glog.V(2).Infof("Invalid kernel flag: %v, expected value: %v, actual value: %v", flag, expectedValue, val)
 		case KernelTunableModify:
 			glog.V(2).Infof("Updating kernel flag: %v, expected value: %v, actual value: %v", flag, expectedValue, val)
-			err = utilsysctl.SetSysctl(flag, expectedValue)
+			err = sysctl.SetSysctl(flag, expectedValue)
 			if err != nil {
 				errList = append(errList, err)
 			}
@@ -326,10 +328,8 @@ func (cm *containerManagerImpl) setupNode() error {
 	if cm.ContainerRuntime == "docker" {
 		if cm.RuntimeCgroupsName != "" {
 			cont := newSystemCgroups(cm.RuntimeCgroupsName)
-			info, err := cm.cadvisorInterface.MachineInfo()
 			var capacity = api.ResourceList{}
-			if err != nil {
-			} else {
+			if info, err := cm.cadvisorInterface.MachineInfo(); err == nil {
 				capacity = cadvisor.CapacityFromMachineInfo(info)
 			}
 			memoryLimit := (int64(capacity.Memory().Value() * DockerMemoryLimitThresholdPercent / 100))
@@ -466,13 +466,14 @@ func (cm *containerManagerImpl) Start(node *api.Node) error {
 		return err
 	}
 	// Don't run a background thread if there are no ensureStateFuncs.
-	numEnsureStateFuncs := 0
+	hasEnsureStateFuncs := false
 	for _, cont := range cm.systemContainers {
 		if cont.ensureStateFunc != nil {
-			numEnsureStateFuncs++
+			hasEnsureStateFuncs = true
+			break
 		}
 	}
-	if numEnsureStateFuncs >= 0 {
+	if hasEnsureStateFuncs {
 		// Run ensure state functions every minute.
 		go wait.Until(func() {
 			for _, cont := range cm.systemContainers {

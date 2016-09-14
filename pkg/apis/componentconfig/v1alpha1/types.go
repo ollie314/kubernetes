@@ -63,7 +63,7 @@ type KubeProxyConfiguration struct {
 	// Must be greater than 0. Only applicable for proxyMode=userspace.
 	UDPIdleTimeout unversioned.Duration `json:"udpTimeoutMilliseconds"`
 	// conntrackMax is the maximum number of NAT connections to track (0 to
-	// leave as-is).  This takes precendence over conntrackMaxPerCore.
+	// leave as-is).  This takes precedence over conntrackMaxPerCore.
 	ConntrackMax int32 `json:"conntrackMax"`
 	// conntrackMaxPerCore is the maximum number of NAT connections to track
 	// per CPU core (0 to leave as-is).  This value is only considered if
@@ -287,7 +287,7 @@ type KubeletConfiguration struct {
 	// status to master. Note: be cautious when changing the constant, it
 	// must work with nodeMonitorGracePeriod in nodecontroller.
 	NodeStatusUpdateFrequency unversioned.Duration `json:"nodeStatusUpdateFrequency"`
-	// imageMinimumGCAge is the minimum age for a unused image before it is
+	// imageMinimumGCAge is the minimum age for an unused image before it is
 	// garbage collected.
 	ImageMinimumGCAge unversioned.Duration `json:"imageMinimumGCAge"`
 	// imageGCHighThresholdPercent is the percent of disk usage after which
@@ -308,8 +308,18 @@ type KubeletConfiguration struct {
 	// various events in kubelet/pod lifecycle
 	NetworkPluginName string `json:"networkPluginName"`
 	// networkPluginDir is the full path of the directory in which to search
-	// for network plugins
+	// for network plugins (and, for backwards-compat, CNI config files)
 	NetworkPluginDir string `json:"networkPluginDir"`
+	// CNIConfDir is the full path of the directory in which to search for
+	// CNI config files
+	CNIConfDir string `json:"cniConfDir"`
+	// CNIBinDir is the full path of the directory in which to search for
+	// CNI plugin binaries
+	CNIBinDir string `json:"cniBinDir"`
+	// networkPluginMTU is the MTU to be passed to the network plugin,
+	// and overrides the default MTU for cases where it cannot be automatically
+	// computed (such as IPSEC).
+	NetworkPluginMTU int32 `json:"networkPluginMTU"`
 	// volumePluginDir is the full path of the directory in which to search
 	// for additional third party volume plugins
 	VolumePluginDir string `json:"volumePluginDir"`
@@ -334,6 +344,10 @@ type KubeletConfiguration struct {
 	CgroupsPerQOS *bool `json:"CgroupsPerQOS,omitempty"`
 	// containerRuntime is the container runtime to use.
 	ContainerRuntime string `json:"containerRuntime"`
+	// remoteRuntimeEndpoint is the endpoint of remote runtime service
+	RemoteRuntimeEndpoint string `json:"remoteRuntimeEndpoint"`
+	// remoteImageEndpoint is the endpoint of remote image service
+	RemoteImageEndpoint string `json:"remoteImageEndpoint"`
 	// runtimeRequestTimeout is the timeout for all runtime requests except long running
 	// requests - pull, logs, exec and attach.
 	RuntimeRequestTimeout unversioned.Duration `json:"runtimeRequestTimeout"`
@@ -466,4 +480,7 @@ type KubeletConfiguration struct {
 	// iptablesDropBit is the bit of the iptables fwmark space to mark for dropping packets.
 	// Values must be within the range [0, 31]. Must be different from other mark bits.
 	IPTablesDropBit *int32 `json:"iptablesDropBit"`
+	// Whitelist of unsafe sysctls or sysctl patterns (ending in *). Use these at your own risk.
+	// Resource isolation might be lacking and pod might influence each other on the same node.
+	AllowedUnsafeSysctls []string `json:"allowedUnsafeSysctls,omitempty"`
 }

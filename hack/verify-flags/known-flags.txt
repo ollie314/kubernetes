@@ -8,6 +8,7 @@ algorithm-provider
 all-namespaces
 allocate-node-cidrs
 allow-privileged
+allowed-not-ready-nodes
 api-burst
 api-prefix
 api-rate
@@ -41,8 +42,8 @@ bind-address
 bind-pods-burst
 bind-pods-qps
 bounding-dirs
+build-dependencies
 build-only
-build-services
 build-tag
 cadvisor-port
 cert-dir
@@ -70,6 +71,8 @@ cluster-tag
 cluster-monitor-period
 cluster-signing-cert-file
 cluster-signing-key-file
+cni-bin-dir
+cni-conf-dir
 concurrent-deployment-syncs
 concurrent-endpoint-syncs
 concurrent-namespace-syncs
@@ -90,6 +93,7 @@ consumer-service-namespace
 contain-pod-resources
 container-port
 container-runtime
+container-runtime-endpoint
 controller-start-interval
 cors-allowed-origins
 cpu-cfs-quota
@@ -98,6 +102,7 @@ create-external-load-balancer
 current-release-pr
 current-replicas
 daemonset-lookup-cache-size
+data-dir
 default-container-cpu-limit
 default-container-mem-limit
 delay-shutdown
@@ -139,6 +144,7 @@ enable-hostpath-provisioner
 enable-server
 enable-swagger-ui
 enable-garbage-collector
+etcd-address
 etcd-cafile
 etcd-certfile
 etcd-config
@@ -163,6 +169,8 @@ executor-logv
 executor-path
 executor-suicide-timeout
 exit-on-lock-contention
+experimental-allowed-unsafe-sysctls
+experimental-bootstrap-kubeconfig
 experimental-flannel-overlay
 experimental-keystone-url
 experimental-nvidia-gpus
@@ -222,10 +230,12 @@ image-gc-high-threshold
 image-gc-low-threshold
 image-project
 image-pull-policy
+image-service-endpoint
 include-extended-apis
 included-types-overrides
 input-base
 input-dirs
+insecure-experimental-approve-all-kubelet-csrs-for-group
 insecure-bind-address
 insecure-port
 insecure-skip-tls-verify
@@ -284,6 +294,7 @@ leader-elect
 leader-elect-lease-duration
 leader-elect-renew-deadline
 leader-elect-retry-period
+lease-duration
 leave-stdin-open
 limit-bytes
 load-balancer-ip
@@ -336,6 +347,7 @@ minion-path-override
 namespace-sync-period
 network-plugin
 network-plugin-dir
+network-plugin-mtu
 no-headers
 no-suggestions
 node-cidr-mask-size
@@ -427,6 +439,7 @@ rkt-path
 rkt-stage1-image
 root-ca-file
 root-dir
+route-reconciliation-period
 run-proxy
 run-services-mode
 runtime-cgroups
@@ -489,11 +502,13 @@ target-port
 target-ram-mb
 tcp-services
 terminated-pod-gc-threshold
+test-flags
 test-timeout
 tls-cert-file
 tls-private-key-file
 to-version
 token-auth-file
+ttl-keys-prefix
 ttl-secs
 type-src
 udp-port
@@ -501,6 +516,7 @@ udp-timeout
 unhealthy-zone-threshold
 unix-socket
 update-period
+upgrade-image
 upgrade-target
 use-kubernetes-cluster-service
 user-whitelist

@@ -100,7 +100,7 @@ func (svcStrategy) Export(ctx api.Context, obj runtime.Object, exact bool) error
 	return nil
 }
 
-func MatchServices(label labels.Selector, field fields.Selector) generic.Matcher {
+func MatchServices(label labels.Selector, field fields.Selector) *generic.SelectionPredicate {
 	return &generic.SelectionPredicate{
 		Label: label,
 		Field: field,
@@ -115,7 +115,7 @@ func MatchServices(label labels.Selector, field fields.Selector) generic.Matcher
 }
 
 func ServiceToSelectableFields(service *api.Service) fields.Set {
-	return generic.ObjectMetaFieldsSet(service.ObjectMeta, true)
+	return generic.ObjectMetaFieldsSet(&service.ObjectMeta, true)
 }
 
 type serviceStatusStrategy struct {

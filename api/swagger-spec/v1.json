@@ -3,6 +3,10 @@
   "apiVersion": "v1",
   "basePath": "https://10.10.10.10:6443",
   "resourcePath": "/api/v1",
+  "info": {
+   "title": "",
+   "description": ""
+  },
   "apis": [
    {
     "path": "/api/v1/namespaces/{namespace}/bindings",
@@ -8549,6 +8553,67 @@
     ]
    },
    {
+    "path": "/api/v1/namespaces/{namespace}/pods/{name}/eviction",
+    "description": "API at /api/v1",
+    "operations": [
+     {
+      "type": "v1alpha1.Eviction",
+      "method": "POST",
+      "summary": "create eviction of a Eviction",
+      "nickname": "createNamespacedEvictionEviction",
+      "parameters": [
+       {
+        "type": "string",
+        "paramType": "query",
+        "name": "pretty",
+        "description": "If 'true', then the output is pretty printed.",
+        "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "v1alpha1.Eviction",
+        "paramType": "body",
+        "name": "body",
+        "description": "",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "namespace",
+        "description": "object name and auth scope, such as for teams and projects",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
+        "type": "string",
+        "paramType": "path",
+        "name": "name",
+        "description": "name of the Eviction",
+        "required": true,
+        "allowMultiple": false
+       }
+      ],
+      "responseMessages": [
+       {
+        "code": 200,
+        "message": "OK",
+        "responseModel": "v1alpha1.Eviction"
+       }
+      ],
+      "produces": [
+       "application/json",
+       "application/yaml",
+       "application/vnd.kubernetes.protobuf"
+      ],
+      "consumes": [
+       "*/*"
+      ]
+     }
+    ]
+   },
+   {
     "path": "/api/v1/namespaces/{namespace}/pods/{name}/exec",
     "description": "API at /api/v1",
     "operations": [
@@ -15895,6 +15960,10 @@
        "type": "string"
       },
       "description": "Must be empty before the object is deleted from the registry. Each entry is an identifier for the responsible component that will remove the entry from the list. If the deletionTimestamp of the object is non-nil, entries in this list can only be removed."
+     },
+     "clusterName": {
+      "type": "string",
+      "description": "The name of the cluster which the object belongs to. This is used to distinguish resources with same name and namespace in different clusters. This field is not set anywhere right now and apiserver is going to ignore it if set in create or update request."
      }
     }
    },
@@ -16789,7 +16858,7 @@
    },
    "v1.NodeCondition": {
     "id": "v1.NodeCondition",
-    "description": "NodeCondition contains condition infromation for a node.",
+    "description": "NodeCondition contains condition information for a node.",
     "required": [
      "type",
      "status"
@@ -17234,7 +17303,7 @@
      },
      "flexVolume": {
       "$ref": "v1.FlexVolumeSource",
-      "description": "FlexVolume represents a generic volume resource that is provisioned/attached using a exec based plugin. This is an alpha feature and may change in future."
+      "description": "FlexVolume represents a generic volume resource that is provisioned/attached using an exec based plugin. This is an alpha feature and may change in future."
      },
      "azureFile": {
       "$ref": "v1.AzureFileVolumeSource",
@@ -17247,6 +17316,10 @@
      "quobyte": {
       "$ref": "v1.QuobyteVolumeSource",
       "description": "Quobyte represents a Quobyte mount on the host that shares a pod's lifetime"
+     },
+     "azureDisk": {
+      "$ref": "v1.AzureDiskVolumeSource",
+      "description": "AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod."
      },
      "accessModes": {
       "type": "array",
@@ -17261,7 +17334,7 @@
      },
      "persistentVolumeReclaimPolicy": {
       "type": "string",
-      "description": "What happens to a persistent volume when released from its claim. Valid options are Retain (default) and Recycle. Recyling must be supported by the volume plugin underlying this persistent volume. More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#recycling-policy"
+      "description": "What happens to a persistent volume when released from its claim. Valid options are Retain (default) and Recycle. Recycling must be supported by the volume plugin underlying this persistent volume. More info: http://releases.k8s.io/HEAD/docs/user-guide/persistent-volumes.md#recycling-policy"
      }
     }
    },
@@ -17535,7 +17608,7 @@
       "items": {
        "type": "string"
       },
-      "description": "Required: FC target world wide names (WWNs)"
+      "description": "Required: FC target worldwide names (WWNs)"
      },
      "lun": {
       "type": "integer",
@@ -17567,7 +17640,7 @@
    },
    "v1.FlexVolumeSource": {
     "id": "v1.FlexVolumeSource",
-    "description": "FlexVolume represents a generic volume resource that is provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.",
+    "description": "FlexVolume represents a generic volume resource that is provisioned/attached using an exec based plugin. This is an alpha feature and may change in future.",
     "required": [
      "driver"
     ],
@@ -17662,6 +17735,40 @@
       "description": "Group to map volume access to Default is no group"
      }
     }
+   },
+   "v1.AzureDiskVolumeSource": {
+    "id": "v1.AzureDiskVolumeSource",
+    "description": "AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.",
+    "required": [
+     "diskName",
+     "diskURI"
+    ],
+    "properties": {
+     "diskName": {
+      "type": "string",
+      "description": "The Name of the data disk in the blob storage"
+     },
+     "diskURI": {
+      "type": "string",
+      "description": "The URI the data disk in the blob storage"
+     },
+     "cachingMode": {
+      "$ref": "v1.AzureDataDiskCachingMode",
+      "description": "Host Caching mode: None, Read Only, Read Write."
+     },
+     "fsType": {
+      "type": "string",
+      "description": "Filesystem type to mount. Must be a filesystem type supported by the host operating system. Ex. \"ext4\", \"xfs\", \"ntfs\". Implicitly inferred to be \"ext4\" if unspecified."
+     },
+     "readOnly": {
+      "type": "boolean",
+      "description": "Defaults to false (read/write). ReadOnly here will force the ReadOnly setting in VolumeMounts."
+     }
+    }
+   },
+   "v1.AzureDataDiskCachingMode": {
+    "id": "v1.AzureDataDiskCachingMode",
+    "properties": {}
    },
    "v1.PersistentVolumeStatus": {
     "id": "v1.PersistentVolumeStatus",
@@ -17880,7 +17987,7 @@
      },
      "flexVolume": {
       "$ref": "v1.FlexVolumeSource",
-      "description": "FlexVolume represents a generic volume resource that is provisioned/attached using a exec based plugin. This is an alpha feature and may change in future."
+      "description": "FlexVolume represents a generic volume resource that is provisioned/attached using an exec based plugin. This is an alpha feature and may change in future."
      },
      "cinder": {
       "$ref": "v1.CinderVolumeSource",
@@ -17917,6 +18024,10 @@
      "quobyte": {
       "$ref": "v1.QuobyteVolumeSource",
       "description": "Quobyte represents a Quobyte mount on the host that shares a pod's lifetime"
+     },
+     "azureDisk": {
+      "$ref": "v1.AzureDiskVolumeSource",
+      "description": "AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod."
      }
     }
    },
@@ -18271,7 +18382,7 @@
     "properties": {
      "fieldRef": {
       "$ref": "v1.ObjectFieldSelector",
-      "description": "Selects a field of the pod; only name and namespace are supported."
+      "description": "Selects a field of the pod: supports metadata.name, metadata.namespace, metadata.labels, metadata.annotations, spec.nodeName, spec.serviceAccountName, status.podIP."
      },
      "resourceFieldRef": {
       "$ref": "v1.ResourceFieldSelector",
@@ -18817,6 +18928,28 @@
      }
     }
    },
+   "v1alpha1.Eviction": {
+    "id": "v1alpha1.Eviction",
+    "description": "Eviction evicts a pod from its node subject to certain policies and safety constraints. This is a subresource of Pod.  A request to cause such an eviction is created by POSTing to .../pods/\u003cpod name\u003e/evictions.",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#types-kinds"
+     },
+     "apiVersion": {
+      "type": "string",
+      "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#resources"
+     },
+     "metadata": {
+      "$ref": "v1.ObjectMeta",
+      "description": "ObjectMeta describes the pod that is being evicted."
+     },
+     "deleteOptions": {
+      "$ref": "v1.DeleteOptions",
+      "description": "DeleteOptions may be provided"
+     }
+    }
+   },
    "v1.PodTemplateList": {
     "id": "v1.PodTemplateList",
     "description": "PodTemplateList is a list of PodTemplates.",
@@ -18970,6 +19103,11 @@
       "type": "integer",
       "format": "int32",
       "description": "The number of pods that have labels matching the labels of the pod template of the replication controller."
+     },
+     "readyReplicas": {
+      "type": "integer",
+      "format": "int32",
+      "description": "The number of ready replicas for this replication controller."
      },
      "observedGeneration": {
       "type": "integer",

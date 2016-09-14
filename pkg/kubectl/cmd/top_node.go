@@ -20,12 +20,13 @@ import (
 	"errors"
 	"io"
 
-	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/kubectl/metricsutil"
-
 	"github.com/renstrom/dedent"
 	"github.com/spf13/cobra"
+
 	"k8s.io/kubernetes/pkg/api"
+	coreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/unversioned"
+	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
+	"k8s.io/kubernetes/pkg/kubectl/metricsutil"
 	"k8s.io/kubernetes/pkg/labels"
 )
 
@@ -33,6 +34,7 @@ import (
 type TopNodeOptions struct {
 	ResourceName string
 	Selector     string
+	NodeClient   coreclient.NodesGetter
 	Client       *metricsutil.HeapsterMetricsClient
 	Printer      *metricsutil.TopCmdPrinter
 }
@@ -84,11 +86,12 @@ func (o *TopNodeOptions) Complete(f *cmdutil.Factory, cmd *cobra.Command, args [
 		return cmdutil.UsageError(cmd, cmd.Use)
 	}
 
-	cli, err := f.Client()
+	clientset, err := f.ClientSet()
 	if err != nil {
 		return err
 	}
-	o.Client = metricsutil.DefaultHeapsterMetricsClient(cli)
+	o.NodeClient = clientset.Core()
+	o.Client = metricsutil.DefaultHeapsterMetricsClient(clientset.Core())
 	o.Printer = metricsutil.NewTopCmdPrinter(out)
 	return nil
 }
@@ -107,11 +110,7 @@ func (o *TopNodeOptions) Validate() error {
 }
 
 func (o TopNodeOptions) RunTopNode() error {
-	metrics, err := o.Client.GetNodeMetrics(o.ResourceName, o.Selector)
-	if err != nil {
-		return err
-	}
-
+	var err error
 	selector := labels.Everything()
 	if len(o.Selector) > 0 {
 		selector, err = labels.Parse(o.Selector)
@@ -119,15 +118,23 @@ func (o TopNodeOptions) RunTopNode() error {
 			return err
 		}
 	}
+	metrics, err := o.Client.GetNodeMetrics(o.ResourceName, selector)
+	if err != nil {
+		return err
+	}
+	if len(metrics) == 0 {
+		return errors.New("metrics not available yet")
+	}
+
 	var nodes []api.Node
 	if len(o.ResourceName) > 0 {
-		node, err := o.Client.Nodes().Get(o.ResourceName)
+		node, err := o.NodeClient.Nodes().Get(o.ResourceName)
 		if err != nil {
 			return err
 		}
 		nodes = append(nodes, *node)
 	} else {
-		nodeList, err := o.Client.Nodes().List(api.ListOptions{
+		nodeList, err := o.NodeClient.Nodes().List(api.ListOptions{
 			LabelSelector: selector,
 		})
 		if err != nil {

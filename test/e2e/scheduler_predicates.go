@@ -119,13 +119,19 @@ func getPodsScheduled(pods *api.PodList) (scheduledPods, notScheduledPods []api.
 		if !masterNodes.Has(pod.Spec.NodeName) {
 			if pod.Spec.NodeName != "" {
 				_, scheduledCondition := api.GetPodCondition(&pod.Status, api.PodScheduled)
-				Expect(scheduledCondition != nil).To(Equal(true))
-				Expect(scheduledCondition.Status).To(Equal(api.ConditionTrue))
+				// We can't assume that the scheduledCondition is always set if Pod is assigned to Node,
+				// as e.g. DaemonController doesn't set it when assigning Pod to a Node. Currently
+				// Kubelet sets this condition when it gets a Pod without it, but if we were expecting
+				// that it would always be not nil, this would cause a rare race condition.
+				if scheduledCondition != nil {
+					Expect(scheduledCondition.Status).To(Equal(api.ConditionTrue))
+				}
 				scheduledPods = append(scheduledPods, pod)
 			} else {
 				_, scheduledCondition := api.GetPodCondition(&pod.Status, api.PodScheduled)
-				Expect(scheduledCondition != nil).To(Equal(true))
-				Expect(scheduledCondition.Status).To(Equal(api.ConditionFalse))
+				if scheduledCondition != nil {
+					Expect(scheduledCondition.Status).To(Equal(api.ConditionFalse))
+				}
 				if scheduledCondition.Reason == "Unschedulable" {
 					notScheduledPods = append(notScheduledPods, pod)
 				}
@@ -198,6 +204,7 @@ var _ = framework.KubeDescribe("SchedulerPredicates [Serial]", func() {
 		ns = f.Namespace.Name
 		nodeList = &api.NodeList{}
 
+		framework.WaitForAllNodesHealthy(c, time.Minute)
 		masterNodes, nodeList = framework.GetMasterAndWorkerNodesOrDie(c)
 
 		err := framework.CheckTestingNSDeletedExcept(c, ns)
@@ -1321,12 +1328,14 @@ var _ = framework.KubeDescribe("SchedulerPredicates [Serial]", func() {
 		framework.ExpectNoError(err)
 
 		By("Trying to apply a random taint on the found node.")
-		taintName := fmt.Sprintf("kubernetes.io/e2e-taint-key-%s", string(uuid.NewUUID()))
-		taintValue := "testing-taint-value"
-		taintEffect := api.TaintEffectNoSchedule
-		framework.AddOrUpdateTaintOnNode(c, nodeName, api.Taint{Key: taintName, Value: taintValue, Effect: taintEffect})
-		framework.ExpectNodeHasTaint(c, nodeName, taintName)
-		defer framework.RemoveTaintOffNode(c, nodeName, taintName)
+		testTaint := api.Taint{
+			Key:    fmt.Sprintf("kubernetes.io/e2e-taint-key-%s", string(uuid.NewUUID())),
+			Value:  "testing-taint-value",
+			Effect: api.TaintEffectNoSchedule,
+		}
+		framework.AddOrUpdateTaintOnNode(c, nodeName, testTaint)
+		framework.ExpectNodeHasTaint(c, nodeName, testTaint)
+		defer framework.RemoveTaintOffNode(c, nodeName, testTaint)
 
 		By("Trying to apply a random label on the found node.")
 		labelKey := fmt.Sprintf("kubernetes.io/e2e-label-key-%s", string(uuid.NewUUID()))
@@ -1347,9 +1356,9 @@ var _ = framework.KubeDescribe("SchedulerPredicates [Serial]", func() {
 					"scheduler.alpha.kubernetes.io/tolerations": `
 						[
 							{
-								"key": "` + taintName + `",
-								"value": "` + taintValue + `",
-								"effect": "` + string(taintEffect) + `"
+								"key": "` + testTaint.Key + `",
+								"value": "` + testTaint.Value + `",
+								"effect": "` + string(testTaint.Effect) + `"
 							}
 						]`,
 				},
@@ -1416,12 +1425,14 @@ var _ = framework.KubeDescribe("SchedulerPredicates [Serial]", func() {
 		framework.ExpectNoError(err)
 
 		By("Trying to apply a random taint on the found node.")
-		taintName := fmt.Sprintf("kubernetes.io/e2e-taint-key-%s", string(uuid.NewUUID()))
-		taintValue := "testing-taint-value"
-		taintEffect := api.TaintEffectNoSchedule
-		framework.AddOrUpdateTaintOnNode(c, nodeName, api.Taint{Key: taintName, Value: taintValue, Effect: taintEffect})
-		framework.ExpectNodeHasTaint(c, nodeName, taintName)
-		defer framework.RemoveTaintOffNode(c, nodeName, taintName)
+		testTaint := api.Taint{
+			Key:    fmt.Sprintf("kubernetes.io/e2e-taint-key-%s", string(uuid.NewUUID())),
+			Value:  "testing-taint-value",
+			Effect: api.TaintEffectNoSchedule,
+		}
+		framework.AddOrUpdateTaintOnNode(c, nodeName, testTaint)
+		framework.ExpectNodeHasTaint(c, nodeName, testTaint)
+		defer framework.RemoveTaintOffNode(c, nodeName, testTaint)
 
 		By("Trying to apply a random label on the found node.")
 		labelKey := fmt.Sprintf("kubernetes.io/e2e-label-key-%s", string(uuid.NewUUID()))
@@ -1459,7 +1470,7 @@ var _ = framework.KubeDescribe("SchedulerPredicates [Serial]", func() {
 		verifyResult(c, podNameNoTolerations, 0, 1, ns)
 
 		By("Removing taint off the node")
-		framework.RemoveTaintOffNode(c, nodeName, taintName)
+		framework.RemoveTaintOffNode(c, nodeName, testTaint)
 		// Wait a bit to allow scheduler to do its thing
 		// TODO: this is brittle; there's no guarantee the scheduler will have run in 10 seconds.
 		framework.Logf("Sleeping 10 seconds and crossing our fingers that scheduler will run in that time.")

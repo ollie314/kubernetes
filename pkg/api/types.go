@@ -149,6 +149,11 @@ type ObjectMeta struct {
 	// from the list. If the deletionTimestamp of the object is non-nil, entries
 	// in this list can only be removed.
 	Finalizers []string `json:"finalizers,omitempty"`
+
+	// The name of the cluster which the object belongs to.
+	// This is used to distinguish resources with same name and namespace in different clusters.
+	// This field is not set anywhere right now and apiserver is going to ignore it if set in create or update request.
+	ClusterName string `json:"clusterName,omitempty"`
 }
 
 const (
@@ -214,7 +219,7 @@ type VolumeSource struct {
 	Quobyte *QuobyteVolumeSource `json:"quobyte,omitempty"`
 
 	// FlexVolume represents a generic volume resource that is
-	// provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.
+	// provisioned/attached using an exec based plugin. This is an alpha feature and may change in future.
 	FlexVolume *FlexVolumeSource `json:"flexVolume,omitempty"`
 
 	// Cinder represents a cinder volume attached and mounted on kubelets host machine
@@ -236,6 +241,8 @@ type VolumeSource struct {
 	ConfigMap *ConfigMapVolumeSource `json:"configMap,omitempty"`
 	// VsphereVolume represents a vSphere volume attached and mounted on kubelets host machine
 	VsphereVolume *VsphereVirtualDiskVolumeSource `json:"vsphereVolume,omitempty"`
+	// AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.
+	AzureDisk *AzureDiskVolumeSource `json:"azureDisk,omitempty"`
 }
 
 // Similar to VolumeSource but meant for the administrator who creates PVs.
@@ -264,7 +271,7 @@ type PersistentVolumeSource struct {
 	// kubelet's host machine and then exposed to the pod.
 	ISCSI *ISCSIVolumeSource `json:"iscsi,omitempty"`
 	// FlexVolume represents a generic volume resource that is
-	// provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.
+	// provisioned/attached using an exec based plugin. This is an alpha feature and may change in future.
 	FlexVolume *FlexVolumeSource `json:"flexVolume,omitempty"`
 	// Cinder represents a cinder volume attached and mounted on kubelets host machine
 	Cinder *CinderVolumeSource `json:"cinder,omitempty"`
@@ -278,6 +285,8 @@ type PersistentVolumeSource struct {
 	AzureFile *AzureFileVolumeSource `json:"azureFile,omitempty"`
 	// VsphereVolume represents a vSphere volume attached and mounted on kubelets host machine
 	VsphereVolume *VsphereVirtualDiskVolumeSource `json:"vsphereVolume,omitempty"`
+	// AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.
+	AzureDisk *AzureDiskVolumeSource `json:"azureDisk,omitempty"`
 }
 
 type PersistentVolumeClaimVolumeSource struct {
@@ -521,7 +530,7 @@ type ISCSIVolumeSource struct {
 // Fibre Channel volumes can only be mounted as read/write once.
 // Fibre Channel volumes support ownership management and SELinux relabeling.
 type FCVolumeSource struct {
-	// Required: FC target world wide names (WWNs)
+	// Required: FC target worldwide names (WWNs)
 	TargetWWNs []string `json:"targetWWNs"`
 	// Required: FC target lun number
 	Lun *int32 `json:"lun"`
@@ -536,7 +545,7 @@ type FCVolumeSource struct {
 }
 
 // FlexVolume represents a generic volume resource that is
-// provisioned/attached using a exec based plugin. This is an alpha feature and may change in future.
+// provisioned/attached using an exec based plugin. This is an alpha feature and may change in future.
 type FlexVolumeSource struct {
 	// Driver is the name of the driver to use for this volume.
 	Driver string `json:"driver"`
@@ -560,7 +569,7 @@ type FlexVolumeSource struct {
 // Represents a Persistent Disk resource in AWS.
 //
 // An AWS EBS disk must exist before mounting to a container. The disk
-// must also be in the same AWS zone as the kubelet. A AWS EBS disk
+// must also be in the same AWS zone as the kubelet. An AWS EBS disk
 // can only be mounted as read/write once. AWS EBS volumes support
 // ownership management and SELinux relabeling.
 type AWSElasticBlockStoreVolumeSource struct {
@@ -788,6 +797,31 @@ type VsphereVirtualDiskVolumeSource struct {
 	FSType string `json:"fsType,omitempty"`
 }
 
+type AzureDataDiskCachingMode string
+
+const (
+	AzureDataDiskCachingNone      AzureDataDiskCachingMode = "None"
+	AzureDataDiskCachingReadOnly  AzureDataDiskCachingMode = "ReadOnly"
+	AzureDataDiskCachingReadWrite AzureDataDiskCachingMode = "ReadWrite"
+)
+
+// AzureDisk represents an Azure Data Disk mount on the host and bind mount to the pod.
+type AzureDiskVolumeSource struct {
+	// The Name of the data disk in the blob storage
+	DiskName string `json:"diskName"`
+	// The URI the the data disk in the blob storage
+	DataDiskURI string `json:"diskURI"`
+	// Host Caching mode: None, Read Only, Read Write.
+	CachingMode *AzureDataDiskCachingMode `json:"cachingMode,omitempty"`
+	// Filesystem type to mount.
+	// Must be a filesystem type supported by the host operating system.
+	// Ex. "ext4", "xfs", "ntfs". Implicitly inferred to be "ext4" if unspecified.
+	FSType *string `json:"fsType,omitempty"`
+	// Defaults to false (read/write). ReadOnly here will force
+	// the ReadOnly setting in VolumeMounts.
+	ReadOnly *bool `json:"readOnly,omitempty"`
+}
+
 // Adapts a ConfigMap into a volume.
 //
 // The contents of the target ConfigMap's Data field will be presented in a
@@ -878,7 +912,8 @@ type EnvVar struct {
 // EnvVarSource represents a source for the value of an EnvVar.
 // Only one of its fields may be set.
 type EnvVarSource struct {
-	// Selects a field of the pod; only name and namespace are supported.
+	// Selects a field of the pod: supports metadata.name, metadata.namespace, metadata.labels, metadata.annotations,
+	// spec.nodeName, spec.serviceAccountName, status.podIP.
 	FieldRef *ObjectFieldSelector `json:"fieldRef,omitempty"`
 	// Selects a resource of the container: only resources limits and requests
 	// (limits.cpu, limits.memory, requests.cpu and requests.memory) are currently supported.
@@ -1529,6 +1564,14 @@ type PodSpec struct {
 	Subdomain string `json:"subdomain,omitempty"`
 }
 
+// Sysctl defines a kernel parameter to be set
+type Sysctl struct {
+	// Name of a property to set
+	Name string `json:"name"`
+	// Value of a property to set
+	Value string `json:"value"`
+}
+
 // PodSecurityContext holds pod-level security attributes and common container settings.
 // Some fields are also present in container.securityContext.  Field values of
 // container.securityContext take precedence over field values of PodSecurityContext.
@@ -1692,6 +1735,9 @@ type ReplicationControllerStatus struct {
 
 	// The number of pods that have labels matching the labels of the pod template of the replication controller.
 	FullyLabeledReplicas int32 `json:"fullyLabeledReplicas,omitempty"`
+
+	// The number of ready replicas for this replication controller.
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
 	// ObservedGeneration is the most recent generation observed by the controller.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
