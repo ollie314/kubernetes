@@ -51,9 +51,9 @@ import (
 	"k8s.io/kubernetes/pkg/controller/deployment"
 	"k8s.io/kubernetes/pkg/controller/disruption"
 	endpointcontroller "k8s.io/kubernetes/pkg/controller/endpoint"
-	"k8s.io/kubernetes/pkg/controller/framework/informers"
 	"k8s.io/kubernetes/pkg/controller/garbagecollector"
 	"k8s.io/kubernetes/pkg/controller/garbagecollector/metaonly"
+	"k8s.io/kubernetes/pkg/controller/informers"
 	"k8s.io/kubernetes/pkg/controller/job"
 	namespacecontroller "k8s.io/kubernetes/pkg/controller/namespace"
 	nodecontroller "k8s.io/kubernetes/pkg/controller/node"
@@ -430,7 +430,7 @@ func StartControllers(s *options.CMServer, kubeClient *client.Client, kubeconfig
 		ProbeControllerVolumePlugins(cloud, s.VolumeConfiguration),
 		cloud,
 		s.ClusterName,
-		sharedInformers.PersistentVolumes().Informer(),
+		nil, // volumeSource
 		nil, // claimSource
 		nil, // classSource
 		nil, // eventRecorder
