@@ -46,7 +46,6 @@ import (
 	"github.com/evanphx/json-patch"
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 const (
@@ -268,6 +267,13 @@ func UsageError(cmd *cobra.Command, format string, args ...interface{}) error {
 	return fmt.Errorf("%s\nSee '%s -h' for help and examples.", msg, cmd.CommandPath())
 }
 
+func IsFilenameEmpty(filenames []string) bool {
+	if len(filenames) == 0 {
+		return true
+	}
+	return false
+}
+
 // Whether this cmd need watching objects.
 func isWatch(cmd *cobra.Command) bool {
 	if w, err := cmd.Flags().GetBool("watch"); w && err == nil {
@@ -279,14 +285,6 @@ func isWatch(cmd *cobra.Command) bool {
 	}
 
 	return false
-}
-
-func getFlag(cmd *cobra.Command, flag string) *pflag.Flag {
-	f := cmd.Flags().Lookup(flag)
-	if f == nil {
-		glog.Fatalf("flag accessed but not defined for command %s: %s", cmd.Name(), flag)
-	}
-	return f
 }
 
 func GetFlagString(cmd *cobra.Command, flag string) string {
@@ -355,8 +353,9 @@ func AddValidateFlags(cmd *cobra.Command) {
 	cmd.MarkFlagFilename("schema-cache-dir")
 }
 
-func AddRecursiveFlag(cmd *cobra.Command, value *bool) {
-	cmd.Flags().BoolVarP(value, "recursive", "R", *value, "Process the directory used in -f, --filename recursively. Useful when you want to manage related manifests organized within the same directory.")
+func AddFilenameOptionFlags(cmd *cobra.Command, options *resource.FilenameOptions, usage string) {
+	kubectl.AddJsonFilenameFlag(cmd, &options.Filenames, "Filename, directory, or URL to files "+usage)
+	cmd.Flags().BoolVarP(&options.Recursive, "recursive", "R", options.Recursive, "Process the directory used in -f, --filename recursively. Useful when you want to manage related manifests organized within the same directory.")
 }
 
 // AddDryRunFlag adds dry-run flag to a command. Usually used by mutations.

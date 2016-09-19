@@ -1027,7 +1027,7 @@ func CreateTestingNS(baseName string, c *client.Client, labels map[string]string
 	}
 	// Be robust about making the namespace creation call.
 	var got *api.Namespace
-	if err := wait.PollImmediate(Poll, SingleCallTimeout, func() (bool, error) {
+	if err := wait.PollImmediate(Poll, 30*time.Second, func() (bool, error) {
 		var err error
 		got, err = c.Namespaces().Create(namespaceObj)
 		if err != nil {
@@ -3415,7 +3415,7 @@ func DeleteRCAndWaitForGC(c *client.Client, ns, name string) error {
 	}
 	terminatePodTime := time.Now().Sub(startTime) - deleteRCTime
 	Logf("Terminating RC %s pods took: %v", name, terminatePodTime)
-	err = waitForPodsGone(ps, 10*time.Second, 10*time.Minute)
+	err = waitForPodsGone(ps, interval, 10*time.Minute)
 	if err != nil {
 		return fmt.Errorf("error while waiting for pods gone %s: %v", name, err)
 	}

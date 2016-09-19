@@ -83,6 +83,21 @@ parameters:
 * `type`: `pd-standard` or `pd-ssd`. Default: `pd-ssd`
 * `zone`: GCE zone. If not specified, a random zone in the same region as controller-manager will be chosen.
 
+#### vSphere
+
+```yaml
+kind: StorageClass
+apiVersion: storage.k8s.io/v1beta1
+metadata:
+  name: slow
+provisioner: kubernetes.io/vsphere-volume
+parameters:
+  diskformat: thin
+```
+
+* `diskformat`: `thin`, `zeroedthick` and `eagerzeroedthick`. See vSphere docs for details. Default: `"thin"`.
+
+
 #### GLUSTERFS
 
 ```yaml
@@ -99,11 +114,40 @@ parameters:
   restuserkey: "password"
 ```
 
-* `endpoint`: `glusterfs-cluster` is the endpoint/service name which includes GlusterFS trusted pool IP addresses and this parameter is mandatory.
-* `resturl` : Gluster REST service url which provision gluster volumes on demand. The format should be `IPaddress:Port` and this is a mandatory parameter for GlusterFS dynamic provisioner.
+* `endpoint`: `glusterfs-cluster` is the endpoint name which includes GlusterFS trusted pool IP addresses. This parameter is mandatory. We need to also create a service for this endpoint, so that the endpoint will be persisted. This service can be without a selector to tell Kubernetes we want to add its endpoints manually.  Please note that, glusterfs plugin looks for the endpoint in the pod namespace, so it is mandatory that the endpoint and service have to be created in Pod's namespace for successful mount of gluster volumes in the pod.
+* `resturl` : Gluster REST service/Heketi service url which provision gluster volumes on demand. The general format should be `IPaddress:Port` and this is a mandatory parameter for GlusterFS dynamic provisioner. If Heketi service is exposed as a routable service in openshift/kubernetes setup, this can have a format similar to
+`http://heketi-storage-project.cloudapps.mystorage.com` where the fqdn is a resolvable heketi service url.
 * `restauthenabled` : Gluster REST service authentication boolean is required if the authentication is enabled on the REST server. If this value is 'true', 'restuser' and 'restuserkey' have to be filled.
-* `restuser` : Gluster REST service user who has access to create volumes in the Gluster Trusted Pool.
-* `restuserkey` : Gluster REST service user's password which will be used for authentication to the REST server.
+* `restuser` : Gluster REST service/Heketi user who has access to create volumes in the Gluster Trusted Pool.
+* `restuserkey` : Gluster REST service/Heketi user's password which will be used for authentication to the REST server.
+
+Reference : ([How to configure Heketi](https://github.com/heketi/heketi/wiki/Setting-up-the-topology))
+
+Create endpoints
+
+As in example [glusterfs-endpoints.json](../../volumes/glusterfs/glusterfs-endpoints.json) file, the "IP" field should be filled with the address of a node in the Glusterfs server cluster. It is fine to give any valid value (from 1 to 65535) to the "port" field.
+
+Create the endpoints,
+
+```sh
+$ kubectl create -f examples/volumes/glusterfs/glusterfs-endpoints.json
+```
+
+You can verify that the endpoints are successfully created by running
+
+```sh
+$ kubectl get endpoints
+NAME                ENDPOINTS
+glusterfs-cluster   10.240.106.152:1,10.240.79.157:1
+```
+
+We need also create a service for this endpoints, so that the endpoints will be persisted. It is possible to create `service` without a selector to tell Kubernetes we want to add its endpoints manually. For an example service file refer [glusterfs-service.json](../../volumes/glusterfs/glusterfs-service.json).
+
+Use this command to create the service:
+
+```sh
+$ kubectl create -f examples/volumes/glusterfs/glusterfs-service.json
+```
 
 #### OpenStack Cinder
 
@@ -123,13 +167,13 @@ parameters:
 
 #### Ceph RBD
 
-```yaml                                                                                                                                                                                                          
-  apiVersion: extensions/v1beta1                                                                                                                                                                                   
-  kind: StorageClass                                                                                                                                                                                               
+```yaml
+  apiVersion: storage.k8s.io/v1beta1
+  kind: StorageClass
   metadata: 
-   name: fast
-provisioner: kubernetes.io/rbd
-parameters:
+    name: fast
+    provisioner: kubernetes.io/rbd
+    parameters:
     monitors: 10.16.153.105:6789
     adminId: kube
     adminSecretName: ceph-secret
@@ -146,6 +190,94 @@ parameters:
 * `pool`: Ceph RBD pool. Default is "rbd".
 * `userId`: Ceph client ID that is used to map the RBD image. Default is the same as `adminId`.
 * `userSecretName`: The name of Ceph Secret for `userId` to map RBD image. It must exist in the same namespace as PVCs. It is required.
+
+#### Quobyte
+
+<!-- BEGIN MUNGE: EXAMPLE quobyte/quobyte-storage-class.yaml -->
+
+```yaml
+apiVersion: storage.k8s.io/v1beta1
+kind: StorageClass
+metadata:
+   name: slow
+provisioner: kubernetes.io/quobyte
+parameters:
+    quobyteAPIServer: "http://138.68.74.142:7860"
+    registry: "138.68.74.142:7861"
+    adminSecretName: "quobyte-admin-secret"
+    adminSecretNamespace: "kube-system"
+    user: "root"
+    group: "root"
+    quobyteConfig: "BASE"
+    quobyteTenant: "DEFAULT"
+```
+
+[Download example](quobyte/quobyte-storage-class.yaml?raw=true)
+<!-- END MUNGE: EXAMPLE quobyte/quobyte-storage-class.yaml -->
+
+* **quobyteAPIServer** API Server of Quobyte in the format http(s)://api-server:7860
+* **registry** Quobyte registry to use to mount the volume. You can specifiy the registry as <host>:<port> pair or if you want to specify multiple registries you just have to put a comma between them e.q. <host1>:<port>,<host2>:<port>,<host3>:<port>. The host can be an IP address or if you have a working DNS you can also provide the DNS names.
+* **adminSecretName** secret that holds information about the Quobyte user and the password to authenticate agains the API server.
+* **adminSecretNamespace** The namespace for **adminSecretName**. Default is `default`.
+* **user** maps all access to this user. Default is `root`.
+* **group** maps all access to this group. Default is `nfsnobody`.
+* **quobyteConfig** use the specified configuration to create the volume. You can create a new configuration or modify an existing one with the Web console or the quobyte CLI. Default is `BASE`
+* **quobyteTenant** use the specified tenant ID to create/delete the volume. This Quobyte tenant has to be already present in Quobyte. Default is `DEFAULT`
+
+First create Quobyte admin's Secret in the system namespace. Here the Secret is created in `kube-system`:
+
+```
+$ kubectl create -f examples/experimental/persistent-volume-provisioning/quobyte/quobyte-admin-secret.yaml --namespace=kube-system
+```
+
+Then create the Quobyte storage class:
+
+```
+$ kubectl create -f examples/experimental/persistent-volume-provisioning/quobyte/quobyte-storage-class.yaml
+```
+
+Now create a PVC
+
+```
+$ kubectl create -f examples/experimental/persistent-volume-provisioning/claim1.json
+```
+
+Check the created PVC:
+
+```
+$ kubectl describe pvc
+Name:       claim1
+Namespace:      default
+Status:     Bound
+Volume:     pvc-bdb82652-694a-11e6-b811-080027242396
+Labels:     <none>
+Capacity:       3Gi
+Access Modes:   RWO
+No events.
+
+$ kubectl describe pv
+Name:  		pvc-bdb82652-694a-11e6-b811-080027242396
+Labels:		<none>
+Status:		Bound
+Claim: 		default/claim1
+Reclaim Policy:	Delete
+Access Modes:  	RWO
+Capacity:      	3Gi
+Message:
+Source:
+    Type:      	Quobyte (a Quobyte mount on the host that shares a pod's lifetime)
+    Registry:  	138.68.79.14:7861
+    Volume:    	kubernetes-dynamic-pvc-bdb97c58-694a-11e6-91b6-080027242396
+    ReadOnly:  	false
+No events.
+```
+
+Create a Pod to use the PVC:
+
+```
+$ kubectl create -f examples/experimental/persistent-volume-provisioning/quobyte/example-pod.yaml
+```
+
 
 ### User provisioning requests
 
