@@ -82,9 +82,8 @@ type Factory struct {
 	clients *ClientCache
 	flags   *pflag.FlagSet
 
-	// Returns interfaces for dealing with arbitrary runtime.Objects. If thirdPartyDiscovery is true, performs API calls
-	// to discovery dynamic API objects registered by third parties.
-	Object func(thirdPartyDiscovery bool) (meta.RESTMapper, runtime.ObjectTyper)
+	// Returns interfaces for dealing with arbitrary runtime.Objects.
+	Object func() (meta.RESTMapper, runtime.ObjectTyper)
 	// Returns interfaces for dealing with arbitrary
 	// runtime.Unstructured. This performs API calls to discover types.
 	UnstructuredObject func() (meta.RESTMapper, runtime.ObjectTyper, error)
@@ -293,7 +292,7 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 		clients: clients,
 		flags:   flags,
 
-		Object: func(discoverDynamicAPIs bool) (meta.RESTMapper, runtime.ObjectTyper) {
+		Object: func() (meta.RESTMapper, runtime.ObjectTyper) {
 			cfg, err := clientConfig.ClientConfig()
 			checkErrWithPrefix("failed to get client config: ", err)
 			cmdApiVersion := unversioned.GroupVersion{}
@@ -302,9 +301,10 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 			}
 
 			mapper := registered.RESTMapper()
+			discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
 			// if we can find the server version and it's current enough to have discovery information, use it.  Otherwise,
 			// fallback to our hardcoded list
-			if discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg); err == nil {
+			if err == nil {
 				if serverVersion, err := discoveryClient.ServerVersion(); err == nil && useDiscoveryRESTMapper(serverVersion.GitVersion) {
 					// register third party resources with the api machinery groups.  This probably should be done, but
 					// its consistent with old code, so we'll start with it.
@@ -326,7 +326,7 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 			}
 
 			// wrap with shortcuts
-			mapper = NewShortcutExpander(mapper)
+			mapper = NewShortcutExpander(mapper, discoveryClient)
 			// wrap with output preferences
 			mapper = kubectl.OutputVersionMapper{RESTMapper: mapper, OutputVersions: []unversioned.GroupVersion{cmdApiVersion}}
 			return mapper, api.Scheme
@@ -363,7 +363,7 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 
 			typer := discovery.NewUnstructuredObjectTyper(groupResources)
 
-			return NewShortcutExpander(mapper), typer, nil
+			return NewShortcutExpander(mapper, dc), typer, nil
 		},
 		RESTClient: func() (*restclient.RESTClient, error) {
 			clientConfig, err := clients.ClientConfigForVersion(nil)
@@ -711,7 +711,6 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 					c:        restclient,
 					fedc:     fedClient,
 					cacheDir: dir,
-					mapper:   api.RESTMapper,
 				}, nil
 			}
 			return validation.NullSchema{}, nil
@@ -974,7 +973,6 @@ type clientSwaggerSchema struct {
 	c        *restclient.RESTClient
 	fedc     *restclient.RESTClient
 	cacheDir string
-	mapper   meta.RESTMapper
 }
 
 const schemaFileName = "schema.json"
@@ -1251,8 +1249,8 @@ func (f *Factory) PrinterForMapping(cmd *cobra.Command, mapping *meta.RESTMappin
 }
 
 // One stop shopping for a Builder
-func (f *Factory) NewBuilder(thirdPartyDiscovery bool) *resource.Builder {
-	mapper, typer := f.Object(thirdPartyDiscovery)
+func (f *Factory) NewBuilder() *resource.Builder {
+	mapper, typer := f.Object()
 
 	return resource.NewBuilder(mapper, typer, resource.ClientMapperFunc(f.ClientForMapping), f.Decoder(true))
 }
