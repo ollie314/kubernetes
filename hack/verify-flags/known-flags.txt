@@ -175,6 +175,7 @@ experimental-flannel-overlay
 experimental-keystone-url
 experimental-nvidia-gpus
 experimental-prefix
+experimental-runtime-integration-type
 external-hostname
 external-ip
 extra-peer-dirs
@@ -444,6 +445,7 @@ run-proxy
 run-services-mode
 runtime-cgroups
 runtime-config
+runtime-integration-type
 runtime-request-timeout
 save-config
 scheduler-config
@@ -532,3 +534,4 @@ windows-line-endings
 www-prefix
 zone-name
 garbage-collector-enabled
+viper-config

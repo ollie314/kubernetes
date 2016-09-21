@@ -34,7 +34,6 @@ import (
 
 	"github.com/blang/semver"
 	"github.com/emicklei/go-restful/swagger"
-	"github.com/imdario/mergo"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
@@ -698,10 +697,11 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 				dir := cacheDir
 				if len(dir) > 0 {
 					version, err := clientset.Discovery().ServerVersion()
-					if err != nil {
-						return nil, err
+					if err == nil {
+						dir = path.Join(cacheDir, version.String())
+					} else {
+						dir = "" // disable caching as a fallback
 					}
-					dir = path.Join(cacheDir, version.String())
 				}
 				fedClient, err := clients.FederationClientForVersion(nil)
 				if err != nil {
@@ -1161,11 +1161,13 @@ func (c *clientSwaggerSchema) ValidateBytes(data []byte) error {
 //     exists and is not a directory.
 func DefaultClientConfig(flags *pflag.FlagSet) clientcmd.ClientConfig {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	// use the standard defaults for this client command
+	// DEPRECATED: remove and replace with something more accurate
+	loadingRules.DefaultClientConfig = &clientcmd.DefaultClientConfig
+
 	flags.StringVar(&loadingRules.ExplicitPath, "kubeconfig", "", "Path to the kubeconfig file to use for CLI requests.")
 
-	overrides := &clientcmd.ConfigOverrides{}
-	// use the standard defaults for this client config
-	mergo.Merge(&overrides.ClusterDefaults, clientcmd.DefaultCluster)
+	overrides := &clientcmd.ConfigOverrides{ClusterDefaults: clientcmd.ClusterDefaults}
 
 	flagNames := clientcmd.RecommendedConfigOverrideFlags("")
 	// short flagnames are disabled by default.  These are here for compatibility with existing scripts

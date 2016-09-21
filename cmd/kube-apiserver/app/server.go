@@ -45,6 +45,7 @@ import (
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/controller/informers"
 	serviceaccountcontroller "k8s.io/kubernetes/pkg/controller/serviceaccount"
+	"k8s.io/kubernetes/pkg/generated/openapi"
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/genericapiserver/authorizer"
 	genericoptions "k8s.io/kubernetes/pkg/genericapiserver/options"
@@ -52,15 +53,15 @@ import (
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/pkg/registry/cachesize"
-	"k8s.io/kubernetes/pkg/registry/clusterrole"
-	clusterroleetcd "k8s.io/kubernetes/pkg/registry/clusterrole/etcd"
-	"k8s.io/kubernetes/pkg/registry/clusterrolebinding"
-	clusterrolebindingetcd "k8s.io/kubernetes/pkg/registry/clusterrolebinding/etcd"
 	"k8s.io/kubernetes/pkg/registry/generic"
-	"k8s.io/kubernetes/pkg/registry/role"
-	roleetcd "k8s.io/kubernetes/pkg/registry/role/etcd"
-	"k8s.io/kubernetes/pkg/registry/rolebinding"
-	rolebindingetcd "k8s.io/kubernetes/pkg/registry/rolebinding/etcd"
+	"k8s.io/kubernetes/pkg/registry/rbac/clusterrole"
+	clusterroleetcd "k8s.io/kubernetes/pkg/registry/rbac/clusterrole/etcd"
+	"k8s.io/kubernetes/pkg/registry/rbac/clusterrolebinding"
+	clusterrolebindingetcd "k8s.io/kubernetes/pkg/registry/rbac/clusterrolebinding/etcd"
+	"k8s.io/kubernetes/pkg/registry/rbac/role"
+	roleetcd "k8s.io/kubernetes/pkg/registry/rbac/role/etcd"
+	"k8s.io/kubernetes/pkg/registry/rbac/rolebinding"
+	rolebindingetcd "k8s.io/kubernetes/pkg/registry/rbac/rolebinding/etcd"
 	"k8s.io/kubernetes/pkg/serviceaccount"
 	"k8s.io/kubernetes/pkg/util/wait"
 )
@@ -282,6 +283,8 @@ func Run(s *options.APIServer) error {
 	genericConfig.ProxyTLSClientConfig = proxyTLSClientConfig
 	genericConfig.Serializer = api.Codecs
 	genericConfig.OpenAPIInfo.Title = "Kubernetes"
+	genericConfig.OpenAPIDefinitions = openapi.OpenAPIDefinitions
+	genericConfig.EnableOpenAPISupport = true
 
 	config := &master.Config{
 		Config:                  genericConfig,

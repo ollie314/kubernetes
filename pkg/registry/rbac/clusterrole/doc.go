@@ -15,5 +15,5 @@ limitations under the License.
 */
 
 // Package certificates provides Registry interface and its RESTStorage
-// implementation for storing RoleBinding objects.
-package rolebinding // import "k8s.io/kubernetes/pkg/registry/rolebinding"
+// implementation for storing ClusterRole objects.
+package clusterrole // import "k8s.io/kubernetes/pkg/registry/rbac/clusterrole"

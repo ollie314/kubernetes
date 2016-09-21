@@ -34,20 +34,21 @@ import (
 	"k8s.io/kubernetes/pkg/apis/rbac"
 	"k8s.io/kubernetes/pkg/apiserver/authenticator"
 	"k8s.io/kubernetes/pkg/controller/informers"
+	"k8s.io/kubernetes/pkg/generated/openapi"
 	"k8s.io/kubernetes/pkg/genericapiserver"
 	"k8s.io/kubernetes/pkg/genericapiserver/authorizer"
 	genericoptions "k8s.io/kubernetes/pkg/genericapiserver/options"
 	genericvalidation "k8s.io/kubernetes/pkg/genericapiserver/validation"
 	"k8s.io/kubernetes/pkg/registry/cachesize"
-	"k8s.io/kubernetes/pkg/registry/clusterrole"
-	clusterroleetcd "k8s.io/kubernetes/pkg/registry/clusterrole/etcd"
-	"k8s.io/kubernetes/pkg/registry/clusterrolebinding"
-	clusterrolebindingetcd "k8s.io/kubernetes/pkg/registry/clusterrolebinding/etcd"
 	"k8s.io/kubernetes/pkg/registry/generic"
-	"k8s.io/kubernetes/pkg/registry/role"
-	roleetcd "k8s.io/kubernetes/pkg/registry/role/etcd"
-	"k8s.io/kubernetes/pkg/registry/rolebinding"
-	rolebindingetcd "k8s.io/kubernetes/pkg/registry/rolebinding/etcd"
+	"k8s.io/kubernetes/pkg/registry/rbac/clusterrole"
+	clusterroleetcd "k8s.io/kubernetes/pkg/registry/rbac/clusterrole/etcd"
+	"k8s.io/kubernetes/pkg/registry/rbac/clusterrolebinding"
+	clusterrolebindingetcd "k8s.io/kubernetes/pkg/registry/rbac/clusterrolebinding/etcd"
+	"k8s.io/kubernetes/pkg/registry/rbac/role"
+	roleetcd "k8s.io/kubernetes/pkg/registry/rbac/role/etcd"
+	"k8s.io/kubernetes/pkg/registry/rbac/rolebinding"
+	rolebindingetcd "k8s.io/kubernetes/pkg/registry/rbac/rolebinding/etcd"
 	"k8s.io/kubernetes/pkg/routes"
 	"k8s.io/kubernetes/pkg/util/wait"
 )
@@ -185,6 +186,8 @@ func Run(s *options.ServerRunOptions) error {
 	genericConfig.APIResourceConfigSource = storageFactory.APIResourceConfigSource
 	genericConfig.MasterServiceNamespace = s.MasterServiceNamespace
 	genericConfig.Serializer = api.Codecs
+	genericConfig.OpenAPIDefinitions = openapi.OpenAPIDefinitions
+	genericConfig.EnableOpenAPISupport = true
 
 	// TODO: Move this to generic api server (Need to move the command line flag).
 	if s.EnableWatchCache {
