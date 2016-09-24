@@ -26,14 +26,15 @@ import (
 	"sync"
 	"time"
 
-	staging "k8s.io/client-go/1.4/kubernetes"
-	"k8s.io/client-go/1.4/pkg/util/sets"
-	clientreporestclient "k8s.io/client-go/1.4/rest"
+	staging "k8s.io/client-go/1.5/kubernetes"
+	"k8s.io/client-go/1.5/pkg/util/sets"
+	clientreporestclient "k8s.io/client-go/1.5/rest"
 	"k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_4"
 	"k8s.io/kubernetes/pkg/api"
 	apierrs "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/release_1_5"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/dynamic"
@@ -197,7 +198,7 @@ func (f *Framework) BeforeEach() {
 		clientRepoConfig := getClientRepoConfig(config)
 		f.StagingClient, err = staging.NewForConfig(clientRepoConfig)
 		Expect(err).NotTo(HaveOccurred())
-		f.ClientPool = dynamic.NewClientPool(config, dynamic.LegacyAPIPathResolverFunc)
+		f.ClientPool = dynamic.NewClientPool(config, registered.RESTMapper(), dynamic.LegacyAPIPathResolverFunc)
 	}
 
 	if f.federated {

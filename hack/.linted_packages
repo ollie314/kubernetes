@@ -56,6 +56,7 @@ hack/cmd/teststale
 pkg/api
 pkg/api/annotations
 pkg/api/errors
+pkg/api/events
 pkg/api/install
 pkg/api/meta
 pkg/api/resource
@@ -104,6 +105,8 @@ pkg/controller/volume/reconciler
 pkg/controller/volume/statusupdater
 pkg/conversion/queryparams
 pkg/credentialprovider/aws
+pkg/genericapiserver/filters
+pkg/genericapiserver/routes
 pkg/hyperkube
 pkg/kubelet/api
 pkg/kubelet/container

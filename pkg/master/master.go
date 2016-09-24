@@ -83,6 +83,7 @@ import (
 	"k8s.io/kubernetes/pkg/registry/extensions/thirdpartyresourcedata"
 	thirdpartyresourcedataetcd "k8s.io/kubernetes/pkg/registry/extensions/thirdpartyresourcedata/etcd"
 	"k8s.io/kubernetes/pkg/registry/generic"
+	"k8s.io/kubernetes/pkg/registry/generic/registry"
 	rbacstorage "k8s.io/kubernetes/pkg/registry/rbac/storage"
 	"k8s.io/kubernetes/pkg/routes"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -103,6 +104,8 @@ const (
 type Config struct {
 	*genericapiserver.Config
 
+	StorageFactory           genericapiserver.StorageFactory
+	EnableWatchCache         bool
 	EnableCoreControllers    bool
 	EndpointReconcilerConfig EndpointReconcilerConfig
 	DeleteCollectionWorkers  int
@@ -155,6 +158,8 @@ type Master struct {
 
 	// Used to start and monitor tunneling
 	tunneler genericapiserver.Tunneler
+
+	restOptionsFactory restOptionsFactory
 }
 
 // thirdPartyEntry combines objects storage and API group into one struct
@@ -201,6 +206,18 @@ func New(c *Config) (*Master, error) {
 		tunneler:                c.Tunneler,
 
 		disableThirdPartyControllerForTesting: c.disableThirdPartyControllerForTesting,
+
+		restOptionsFactory: restOptionsFactory{
+			deleteCollectionWorkers: c.DeleteCollectionWorkers,
+			enableGarbageCollection: c.EnableGarbageCollection,
+			storageFactory:          c.StorageFactory,
+		},
+	}
+
+	if c.EnableWatchCache {
+		m.restOptionsFactory.storageDecorator = registry.StorageWithCacher
+	} else {
+		m.restOptionsFactory.storageDecorator = generic.UndecoratedStorage
 	}
 
 	// Add some hardcoded storage for now.  Append to the map.
@@ -287,7 +304,7 @@ func (m *Master) InstallAPIs(c *Config) {
 	}
 
 	restOptionsGetter := func(resource unversioned.GroupResource) generic.RESTOptions {
-		return m.GetRESTOptionsOrDie(c, resource)
+		return m.restOptionsFactory.NewFor(resource)
 	}
 
 	// stabilize order.
@@ -331,14 +348,16 @@ func (m *Master) InstallAPIs(c *Config) {
 		apiGroupsInfo = append(apiGroupsInfo, apiGroupInfo)
 	}
 
-	if err := m.InstallAPIGroups(apiGroupsInfo); err != nil {
-		glog.Fatalf("Error in registering group versions: %v", err)
+	for i := range apiGroupsInfo {
+		if err := m.InstallAPIGroup(&apiGroupsInfo[i]); err != nil {
+			glog.Fatalf("Error in registering group versions: %v", err)
+		}
 	}
 }
 
 func (m *Master) initV1ResourcesStorage(c *Config) {
 	restOptions := func(resource string) generic.RESTOptions {
-		return m.GetRESTOptionsOrDie(c, api.Resource(resource))
+		return m.restOptionsFactory.NewFor(api.Resource(resource))
 	}
 
 	podTemplateStorage := podtemplateetcd.NewREST(restOptions("podTemplates"))
@@ -725,7 +744,7 @@ func (m *Master) InstallThirdPartyResource(rsrc *extensions.ThirdPartyResource) 
 	if err := thirdparty.InstallREST(m.HandlerContainer); err != nil {
 		glog.Errorf("Unable to setup thirdparty api: %v", err)
 	}
-	apiserver.AddGroupWebService(api.Codecs, m.HandlerContainer, path, apiGroup)
+	m.HandlerContainer.Add(apiserver.NewGroupWebService(api.Codecs, path, apiGroup))
 
 	m.addThirdPartyResourceStorage(path, plural.Resource, thirdparty.Storage[plural.Resource].(*thirdpartyresourcedataetcd.REST), apiGroup)
 	apiserver.InstallServiceErrorHandler(api.Codecs, m.HandlerContainer, m.NewRequestInfoResolver(), []string{thirdparty.GroupVersion.String()})
@@ -778,18 +797,25 @@ func (m *Master) thirdpartyapi(group, kind, version, pluralResource string) *api
 	}
 }
 
-func (m *Master) GetRESTOptionsOrDie(c *Config, resource unversioned.GroupResource) generic.RESTOptions {
-	storageConfig, err := c.StorageFactory.NewConfig(resource)
+type restOptionsFactory struct {
+	deleteCollectionWorkers int
+	enableGarbageCollection bool
+	storageFactory          genericapiserver.StorageFactory
+	storageDecorator        generic.StorageDecorator
+}
+
+func (f restOptionsFactory) NewFor(resource unversioned.GroupResource) generic.RESTOptions {
+	storageConfig, err := f.storageFactory.NewConfig(resource)
 	if err != nil {
 		glog.Fatalf("Unable to find storage destination for %v, due to %v", resource, err.Error())
 	}
 
 	return generic.RESTOptions{
 		StorageConfig:           storageConfig,
-		Decorator:               m.StorageDecorator(),
-		DeleteCollectionWorkers: m.deleteCollectionWorkers,
-		EnableGarbageCollection: c.Config.EnableGarbageCollection,
-		ResourcePrefix:          c.StorageFactory.ResourcePrefix(resource),
+		Decorator:               f.storageDecorator,
+		DeleteCollectionWorkers: f.deleteCollectionWorkers,
+		EnableGarbageCollection: f.enableGarbageCollection,
+		ResourcePrefix:          f.storageFactory.ResourcePrefix(resource),
 	}
 }
 
