@@ -24,6 +24,7 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/golang/glog"
+	cadvisorapi "github.com/google/cadvisor/info/v1"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/client/record"
@@ -68,6 +69,9 @@ type kubeGenericRuntimeManager struct {
 	osInterface         kubecontainer.OSInterface
 	containerRefManager *kubecontainer.RefManager
 
+	// machineInfo contains the machine information.
+	machineInfo *cadvisorapi.MachineInfo
+
 	// Container GC manager
 	containerGC *containerGC
 
@@ -102,6 +106,7 @@ func NewKubeGenericRuntimeManager(
 	recorder record.EventRecorder,
 	livenessManager proberesults.Manager,
 	containerRefManager *kubecontainer.RefManager,
+	machineInfo *cadvisorapi.MachineInfo,
 	podGetter podGetter,
 	osInterface kubecontainer.OSInterface,
 	networkPlugin network.NetworkPlugin,
@@ -120,6 +125,7 @@ func NewKubeGenericRuntimeManager(
 		cpuCFSQuota:         cpuCFSQuota,
 		livenessManager:     livenessManager,
 		containerRefManager: containerRefManager,
+		machineInfo:         machineInfo,
 		osInterface:         osInterface,
 		networkPlugin:       networkPlugin,
 		runtimeHelper:       runtimeHelper,
@@ -499,7 +505,7 @@ func (m *kubeGenericRuntimeManager) SyncPod(pod *api.Pod, _ api.PodStatus, podSt
 			glog.V(3).Infof("Killing unwanted container %q(id=%q) for pod %q", containerInfo.name, containerID, format.Pod(pod))
 			killContainerResult := kubecontainer.NewSyncResult(kubecontainer.KillContainer, containerInfo.name)
 			result.AddSyncResult(killContainerResult)
-			if err := m.killContainer(pod, containerID, containerInfo.container, containerInfo.message, nil); err != nil {
+			if err := m.killContainer(pod, containerID, containerInfo.name, containerInfo.message, nil); err != nil {
 				killContainerResult.Fail(kubecontainer.ErrKillContainer, err.Error())
 				glog.Errorf("killContainer %q(id=%q) for pod %q failed: %v", containerInfo.name, containerID, format.Pod(pod), err)
 				return

@@ -1968,14 +1968,21 @@ var OpenAPIDefinitions *common.OpenAPIDefinitions = &common.OpenAPIDefinitions{
 					},
 					"conntrackMax": {
 						SchemaProps: spec.SchemaProps{
-							Description: "conntrackMax is the maximum number of NAT connections to track (0 to leave as-is).  This takes precedence over conntrackMaxPerCore.",
+							Description: "conntrackMax is the maximum number of NAT connections to track (0 to leave as-is).  This takes precedence over conntrackMaxPerCore and conntrackMin.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
 					},
 					"conntrackMaxPerCore": {
 						SchemaProps: spec.SchemaProps{
-							Description: "conntrackMaxPerCore is the maximum number of NAT connections to track per CPU core (0 to leave as-is).  This value is only considered if conntrackMax == 0.",
+							Description: "conntrackMaxPerCore is the maximum number of NAT connections to track per CPU core (0 to leave the limit as-is and ignore conntrackMin).",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"conntrackMin": {
+						SchemaProps: spec.SchemaProps{
+							Description: "conntrackMin is the minimum value of connect-tracking records to allocate, regardless of conntrackMaxPerCore (set conntrackMaxPerCore=0 to leave the limit as-is).",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -1987,7 +1994,7 @@ var OpenAPIDefinitions *common.OpenAPIDefinitions = &common.OpenAPIDefinitions{
 						},
 					},
 				},
-				Required: []string{"TypeMeta", "bindAddress", "clusterCIDR", "healthzBindAddress", "healthzPort", "hostnameOverride", "iptablesMasqueradeBit", "iptablesSyncPeriodSeconds", "kubeconfigPath", "masqueradeAll", "master", "oomScoreAdj", "mode", "portRange", "resourceContainer", "udpTimeoutMilliseconds", "conntrackMax", "conntrackMaxPerCore", "conntrackTCPEstablishedTimeout"},
+				Required: []string{"TypeMeta", "bindAddress", "clusterCIDR", "healthzBindAddress", "healthzPort", "hostnameOverride", "iptablesMasqueradeBit", "iptablesSyncPeriodSeconds", "kubeconfigPath", "masqueradeAll", "master", "oomScoreAdj", "mode", "portRange", "resourceContainer", "udpTimeoutMilliseconds", "conntrackMax", "conntrackMaxPerCore", "conntrackMin", "conntrackTCPEstablishedTimeout"},
 			},
 		},
 		Dependencies: []string{
@@ -5141,6 +5148,23 @@ var OpenAPIDefinitions *common.OpenAPIDefinitions = &common.OpenAPIDefinitions{
 		},
 		Dependencies: []string{
 			"runtime.Object"},
+	},
+	"rbac.PolicyRuleBuilder": {
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PolicyRuleBuilder let's us attach methods.  A no-no for API types. We use it to construct rules in code.  It's more compact than trying to write them out in a literal and allows us to perform some basic checking during construction",
+				Properties: map[string]spec.Schema{
+					"PolicyRule": {
+						SchemaProps: spec.SchemaProps{
+							Ref: spec.MustCreateRef("#/definitions/rbac.PolicyRule"),
+						},
+					},
+				},
+				Required: []string{"PolicyRule"},
+			},
+		},
+		Dependencies: []string{
+			"rbac.PolicyRule"},
 	},
 	"rbac.Role": {
 		Schema: spec.Schema{
@@ -13360,14 +13384,21 @@ var OpenAPIDefinitions *common.OpenAPIDefinitions = &common.OpenAPIDefinitions{
 					},
 					"conntrackMax": {
 						SchemaProps: spec.SchemaProps{
-							Description: "conntrackMax is the maximum number of NAT connections to track (0 to leave as-is).  This takes precedence over conntrackMaxPerCore.",
+							Description: "conntrackMax is the maximum number of NAT connections to track (0 to leave as-is).  This takes precedence over conntrackMaxPerCore and conntrackMin.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
 					},
 					"conntrackMaxPerCore": {
 						SchemaProps: spec.SchemaProps{
-							Description: "conntrackMaxPerCore is the maximum number of NAT connections to track per CPU core (0 to leave as-is).  This value is only considered if conntrackMax == 0.",
+							Description: "conntrackMaxPerCore is the maximum number of NAT connections to track per CPU core (0 to leave the limit as-is and ignore conntrackMin).",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"conntrackMin": {
+						SchemaProps: spec.SchemaProps{
+							Description: "conntrackMin is the minimum value of connect-tracking records to allocate, regardless of conntrackMaxPerCore (set conntrackMaxPerCore=0 to leave the limit as-is).",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -13379,7 +13410,7 @@ var OpenAPIDefinitions *common.OpenAPIDefinitions = &common.OpenAPIDefinitions{
 						},
 					},
 				},
-				Required: []string{"TypeMeta", "bindAddress", "clusterCIDR", "healthzBindAddress", "healthzPort", "hostnameOverride", "iptablesMasqueradeBit", "iptablesSyncPeriodSeconds", "kubeconfigPath", "masqueradeAll", "master", "oomScoreAdj", "mode", "portRange", "resourceContainer", "udpTimeoutMilliseconds", "conntrackMax", "conntrackMaxPerCore", "conntrackTCPEstablishedTimeout"},
+				Required: []string{"TypeMeta", "bindAddress", "clusterCIDR", "healthzBindAddress", "healthzPort", "hostnameOverride", "iptablesMasqueradeBit", "iptablesSyncPeriodSeconds", "kubeconfigPath", "masqueradeAll", "master", "oomScoreAdj", "mode", "portRange", "resourceContainer", "udpTimeoutMilliseconds", "conntrackMax", "conntrackMaxPerCore", "conntrackMin", "conntrackTCPEstablishedTimeout"},
 			},
 		},
 		Dependencies: []string{

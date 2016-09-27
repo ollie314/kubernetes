@@ -1,6 +1,6 @@
 <!-- BEGIN MUNGE: GENERATED_TOC -->
 
-- [v1.4.0 (draft)](#v140-draft)
+- [v1.4.0](#v140)
   - [Downloads](#downloads)
   - [Major Themes](#major-themes)
   - [Features](#features)
@@ -188,7 +188,8 @@
 
 <!-- NEW RELEASE NOTES ENTRY -->
 
-# v1.4.0 (draft)
+
+# v1.4.0
 
 [Documentation](http://kubernetes.github.io) & [Examples](http://releases.k8s.io/release-1.4/examples)
 
@@ -196,7 +197,7 @@
 
 binary | sha256 hash
 ------ | -----------
-kubernetes.tar.gz | `TODO`
+[kubernetes.tar.gz](https://storage.googleapis.com/kubernetes-release/release/v1.4.0/kubernetes.tar.gz) | `6cf3d78230f7659b87fa399a56a7aaed1fde6a73be9d05e25feedacfbd8d5a16`
 
 ## Major Themes
 
@@ -207,8 +208,8 @@ kubernetes.tar.gz | `TODO`
   - Enhanced persistence capabilities (eg: `StorageClasses`, new volume plugins)
   - New resources and scheduler features (eg: `ScheduledJob` resource, pod/node affinity/anti-affinity)
 - **Cluster Federation**
-  - Multi-Zone Ingress
-  - Expanded support for resources such as Namespaces, Events, ReplicaSets
+  - Global Multi-cluster HTTP(S) Ingress across GCE and GKE clusters.
+  - Expanded support for federated hybrid-cloud resources including ReplicaSets, Secrets, Namespaces and Events.
 - **Security**
   - Increased pod-level security granularity (eg: Container Image Policies, AppArmor and `sysctl` support)
   - Increased cluster-level security granularity (eg: Access Review API)
@@ -228,30 +229,50 @@ This is the first release tracked via the use of the [kubernetes/features](https
 - **Cluster Lifecycle**
   - [alpha] Ensure critical cluster infrastructure pods (Heapster, DNS, etc.) can schedule by evicting regular pods when necessary to make the critical pods schedule. ([docs](http://kubernetes.io/docs/admin/rescheduler/#guaranteed-scheduling-of-critical-add-on-pods)) ([kubernetes/features#62](https://github.com/kubernetes/features/issues/62))
   - [alpha] Simplifies bootstrapping of TLS secured communication between the API server and kubelet. ([docs](http://kubernetes.io/docs/admin/master-node-communication/#kubelet-tls-bootstrap)) ([kubernetes/features#43](https://github.com/kubernetes/features/issues/43))
-  - [alpha] `kubeadm` tool makes install much easier.  ([docs](http://kubernetes.io/docs/kubeadm/)) ([kubernetes/features#11](https://github.com/kubernetes/features/issues/11))
+  - [alpha] The `kubeadm` tool makes it much easier to bootstrap Kubernetes. ([docs](http://kubernetes.io/docs/getting-started-guides/kubeadm/)) ([kubernetes/features#11](https://github.com/kubernetes/features/issues/11))
 - **Federation**
-  - [alpha] Creating a `Federated Ingress` is as simple as submitting an `Ingress` config/manifest to the Federation API Server. Federation then creates a single global VIP to load balance the incoming L7 traffic across all the registered clusters no matter in what regions the clusters are. GCE L7 LoadBalancer is the only supported implementation in this release. ([kubernetes/features#82](https://github.com/kubernetes/features/issues/82))
-  - [alpha] Creating a `Namespace` in federation causes matching `Namespace`s to be created in all the clusters registered with that federation. ([docs](http://kubernetes.io/docs/user-guide/federation/namespaces)) ([kubernetes/features#69](https://github.com/kubernetes/features/issues/69))
+  - [alpha] Creating a `Federated Ingress` is as simple as submitting
+    an `Ingress` creation request to the Federation API Server. The
+    Federation control system then creates and maintains a single
+    global virtual IP to load balance incoming HTTP(S) traffic across
+    some or all the registered clusters, across all regions. Google's
+    GCE L7 LoadBalancer is the first supported implementation, and
+	is available in this release.
+	([docs](http://kubernetes.io/docs/user-guide/federation/federated-ingress.md))
+	([kubernetes/features#82](https://github.com/kubernetes/features/issues/82))
+  - [beta] `Federated Replica Sets` create and maintain matching
+    `Replica Set`s in some or all clusters in a federation, with the
+    desired replica count distributed equally or according to
+    specified per-cluster weights.
+	([docs](http://kubernetes.io/docs/user-guide/federation/federated-replicasets.md))
+	([kubernetes/features#46](https://github.com/kubernetes/features/issues/46))
+  - [beta] `Federated Secrets` are created and kept consistent across all clusters in a federation.
+    ([docs](http://kubernetes.io/docs/user-guide/federation/federated-secrets.md))
+    ([kubernetes/features#68](https://github.com/kubernetes/features/issues/68))
+  - [beta] Federation API server gained support for events and many
+    federation controllers now report important events.
+    ([docs](http://kubernetes.io/docs/user-guide/federation/events))
+    ([kubernetes/features#70](https://github.com/kubernetes/features/issues/70))
+  - [alpha] Creating a `Federated Namespace` causes matching
+    `Namespace`s to be created and maintained in all the clusters registered with that federation. ([docs](http://kubernetes.io/docs/user-guide/federation/federated-namespaces.md)) ([kubernetes/features#69](https://github.com/kubernetes/features/issues/69))
   - [alpha] ingress has alpha support for a single master multi zone cluster ([docs](http://kubernetes.io/docs/user-guide/ingress.md#failing-across-availability-zones)) ([kubernetes/features#52](https://github.com/kubernetes/features/issues/52))
-  - [beta] Federation API server gained support for events and many federation controllers now report important events. ([docs](http://kubernetes.io/docs/user-guide/federation/events)) ([kubernetes/features#70](https://github.com/kubernetes/features/issues/70))
-  - [beta] `Secret` created in federation are distributed to all the clusters in that federation.  ([kubernetes/features#68](https://github.com/kubernetes/features/issues/68))
-  - [beta] Submitting a `Replica Set` to the Federation API Server creates matching `Replica Set`s in the underlying clusters with the desired replica count distributed across all the clusters. ([kubernetes/features#46](https://github.com/kubernetes/features/issues/46))
 - **Network**
   - [alpha] Service LB now has alpha support for preserving client source IP ([docs](http://kubernetes.io/docs/user-guide/load-balancer/)) ([kubernetes/features#27](https://github.com/kubernetes/features/issues/27))
 - **Node**
   - [alpha] Publish node performance dashboard at http://node-perf-dash.k8s.io/#/builds ([docs](https://github.com/kubernetes/contrib/blob/master/node-perf-dash/README.md)) ([kubernetes/features#83](https://github.com/kubernetes/features/issues/83))
   - [alpha] Pods now have alpha support for setting whitelisted, safe sysctls. Unsafe sysctls can be whitelisted on the kubelet. ([docs](http://kubernetes.io/docs/admin/sysctls/)) ([kubernetes/features#34](https://github.com/kubernetes/features/issues/34))
   - [beta] AppArmor profiles can be specified & applied to pod containers ([docs](http://kubernetes.io/docs/admin/apparmor/)) ([kubernetes/features#24](https://github.com/kubernetes/features/issues/24))
-  - [beta] Cluster policy to control access and defaults of security related features ([docs](http://kubernetes.io/docs/user-guide/load-balancer/)) ([kubernetes/features#5](https://github.com/kubernetes/features/issues/5))
+  - [beta] Cluster policy to control access and defaults of security related features ([docs](http://kubernetes.io/docs/user-guide/pod-security-policy/)) ([kubernetes/features#5](https://github.com/kubernetes/features/issues/5))
   - [stable] kubelet is able to evict pods when it observes disk pressure ([docs](http://kubernetes.io/docs/admin/out-of-resource/)) ([kubernetes/features#39](https://github.com/kubernetes/features/issues/39))
   - [stable] Automated docker validation results posted to https://k8s-testgrid.appspot.com/docker [kubernetes/features#57](https://github.com/kubernetes/features/issues/57)
 - **Scheduling**
   - [alpha] Allows pods to require or prohibit (or prefer or prefer not) co-scheduling on the same node (or zone or other topology domain) as another set of pods. ([docs](http://kubernetes.io/docs/user-guide/node-selection/) ([kubernetes/features#51](https://github.com/kubernetes/features/issues/51))
 - **Storage**
   - [beta] Persistant Volume provisioning now supports multiple provisioners using StorageClass configuration. ([docs](http://kubernetes.io/docs/user-guide/persistent-volumes/)) ([kubernetes/features#36](https://github.com/kubernetes/features/issues/36))
-  - [stable] New volume plugin for the Quobyte Distributed File System ([docs](http://kubernetes.io/docs/user-guide/volumes/)) ([kubernetes/features#80](https://github.com/kubernetes/features/issues/80))
-  - [stable] New volume plugin for Azure Data Disk ([docs](http://kubernetes.io/docs/user-guide/volumes)) ([kubernetes/features#79](https://github.com/kubernetes/features/issues/79))
+  - [stable] New volume plugin for the Quobyte Distributed File System ([docs](http://kubernetes.io/docs/user-guide/volumes/#quobyte)) ([kubernetes/features#80](https://github.com/kubernetes/features/issues/80))
+  - [stable] New volume plugin for Azure Data Disk ([docs](http://kubernetes.io/docs/user-guide/volumes/#azurediskvolume)) ([kubernetes/features#79](https://github.com/kubernetes/features/issues/79))
 - **UI**
+  - [stable] Kubernetes Dashboard UI - a great looking Kubernetes Dashboard UI with 90% CLI parity for at-a-glance management. [docs](https://github.com/kubernetes/dashboard)
   - [stable] `kubectl` no longer applies defaults before sending objects to the server in create and update requests, allowing the server to apply the defaults. ([kubernetes/features#55](https://github.com/kubernetes/features/issues/55))
 
 ## Known Issues
@@ -290,6 +311,7 @@ If you use an old version kubectl to delete a replication controller or replicas
 ## Action Required Before Upgrading
 
 - If you are using Kubernetes to manage `docker` containers, please be aware Kubernetes has been validated to work with docker 1.9.1, docker 1.11.2 (#23397), and docker 1.12.0 (#28698)
+- If you upgrade your apiserver to 1.4.x but leave your kubelets at 1.3.x, they will not report init container status, but init containers will work properly.  Upgrading kubelets to 1.4.x fixes this.
 - The NamespaceExists and NamespaceAutoProvision admission controllers have been removed, use the NamespaceLifecycle admission controller instead (#31250, @derekwaynecarr)
 - If upgrading Cluster Federation components from 1.3.x, the `federation-apiserver` and `federation-controller-manager` binaries have been folded into `hyperkube`.  Please switch to using that instead.  (#29929, @madhusudancs)
 - If you are using the PodSecurityPolicy feature (eg: `kubectl get podsecuritypolicy` does not error, and returns one or more objects), be aware that init containers have moved from alpha to beta.  If there are any pods with the key `pods.beta.kubernetes.io/init-containers`, then that pod may not have been filtered by the PodSecurityPolicy. You should find such pods and either delete them or audit them to ensure they do not use features that you intend to be blocked by PodSecurityPolicy. (#31026, @erictune)

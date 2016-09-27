@@ -35,8 +35,9 @@ kube::golang::server_targets() {
     cmd/kube-apiserver
     cmd/kube-controller-manager
     cmd/kubelet
-    cmd/kubemark
+    cmd/kubeadm
     cmd/hyperkube
+    cmd/kube-discovery
     plugin/cmd/kube-scheduler
   )
   if [ -n "${KUBERNETES_CONTRIB:-}" ]; then
@@ -146,14 +147,16 @@ readonly KUBE_TEST_PORTABLE=(
   hack/lib
 )
 
-# Node test has built-in etcd and kube-apiserver, it can only be built on the
-# same platforms with kube-apiserver.
-readonly KUBE_NODE_TEST_TARGETS=(
+# Test targets which run on the Kubernetes clusters directly, so we only
+# need to target server platforms.
+# These binaries will be distributed in the kubernetes-test tarball.
+readonly KUBE_TEST_SERVER_TARGETS=(
+  cmd/kubemark
   vendor/github.com/onsi/ginkgo/ginkgo
   test/e2e_node/e2e_node.test
 )
-readonly KUBE_NODE_TEST_BINARIES=("${KUBE_NODE_TEST_TARGETS[@]##*/}")
-readonly KUBE_NODE_TEST_PLATFORMS=("${KUBE_SERVER_PLATFORMS[@]}")
+readonly KUBE_TEST_SERVER_BINARIES=("${KUBE_TEST_SERVER_TARGETS[@]##*/}")
+readonly KUBE_TEST_SERVER_PLATFORMS=("${KUBE_SERVER_PLATFORMS[@]}")
 
 # Gigabytes desired for parallel platform builds. 11 is fairly
 # arbitrary, but is a reasonable splitting point for 2015
@@ -170,7 +173,7 @@ readonly KUBE_ALL_TARGETS=(
   "${KUBE_SERVER_TARGETS[@]}"
   "${KUBE_CLIENT_TARGETS[@]}"
   "${KUBE_TEST_TARGETS[@]}"
-  "${KUBE_NODE_TEST_TARGETS[@]}"
+  "${KUBE_TEST_SERVER_TARGETS[@]}"
 )
 readonly KUBE_ALL_BINARIES=("${KUBE_ALL_TARGETS[@]##*/}")
 
@@ -180,6 +183,8 @@ readonly KUBE_STATIC_LIBRARIES=(
   kube-dns
   kube-scheduler
   kube-proxy
+  kube-discovery
+  kubeadm
   kubectl
 )
 
