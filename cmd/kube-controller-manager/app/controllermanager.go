@@ -138,6 +138,7 @@ func Run(s *options.CMServer) error {
 	if err != nil {
 		glog.Fatalf("Invalid API configuration: %v", err)
 	}
+	leaderElectionClient := clientset.NewForConfigOrDie(restclient.AddUserAgent(kubeconfig, "leader-election"))
 
 	go func() {
 		mux := http.NewServeMux()
@@ -183,12 +184,12 @@ func Run(s *options.CMServer) error {
 			Namespace: "kube-system",
 			Name:      "kube-controller-manager",
 		},
-		EndpointsClient: kubeClient,
-		Identity:        id,
-		EventRecorder:   recorder,
-		LeaseDuration:   s.LeaderElection.LeaseDuration.Duration,
-		RenewDeadline:   s.LeaderElection.RenewDeadline.Duration,
-		RetryPeriod:     s.LeaderElection.RetryPeriod.Duration,
+		Client:        leaderElectionClient,
+		Identity:      id,
+		EventRecorder: recorder,
+		LeaseDuration: s.LeaderElection.LeaseDuration.Duration,
+		RenewDeadline: s.LeaderElection.RenewDeadline.Duration,
+		RetryPeriod:   s.LeaderElection.RetryPeriod.Duration,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: run,
 			OnStoppedLeading: func() {
@@ -221,8 +222,8 @@ func StartControllers(s *options.CMServer, kubeconfig *restclient.Config, stop <
 	time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 
 	if s.TerminatedPodGCThreshold > 0 {
-		go podgc.New(client("pod-garbage-collector"), ResyncPeriod(s), int(s.TerminatedPodGCThreshold)).
-			Run(wait.NeverStop)
+		go podgc.NewPodGC(client("pod-garbage-collector"), sharedInformers.Pods().Informer(),
+			int(s.TerminatedPodGCThreshold)).Run(wait.NeverStop)
 		time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 	}
 
