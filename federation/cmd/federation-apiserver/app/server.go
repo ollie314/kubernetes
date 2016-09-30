@@ -115,6 +115,8 @@ func Run(s *options.ServerRunOptions) error {
 	}
 
 	apiAuthenticator, err := authenticator.New(authenticator.AuthenticatorConfig{
+		Anonymous:         s.AnonymousAuth,
+		AnyToken:          s.EnableAnyToken,
 		BasicAuthFile:     s.BasicAuthFile,
 		ClientCAFile:      s.ClientCAFile,
 		TokenAuthFile:     s.TokenAuthFile,
@@ -219,7 +221,7 @@ func Run(s *options.ServerRunOptions) error {
 		cachesize.SetWatchCacheSizes(s.WatchCacheSizes)
 	}
 
-	m, err := genericConfig.New()
+	m, err := genericConfig.Complete().New()
 	if err != nil {
 		return err
 	}

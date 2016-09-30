@@ -49,7 +49,6 @@ import (
 	certutil "k8s.io/kubernetes/pkg/util/cert"
 	utilnet "k8s.io/kubernetes/pkg/util/net"
 	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
-	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 // Info about an API group.
@@ -187,13 +186,6 @@ func (s *GenericAPIServer) MinRequestTimeout() time.Duration {
 	return s.minRequestTimeout
 }
 
-func (s *GenericAPIServer) NewRequestInfoResolver() *apiserver.RequestInfoResolver {
-	return &apiserver.RequestInfoResolver{
-		APIPrefixes:          sets.NewString(strings.Trim(s.legacyAPIPrefix, "/"), strings.Trim(s.apiPrefix, "/")), // all possible API prefixes
-		GrouplessAPIPrefixes: sets.NewString(strings.Trim(s.legacyAPIPrefix, "/")),                                 // APIPrefixes that won't have groups (legacy)
-	}
-}
-
 // HandleWithAuth adds an http.Handler for pattern to an http.ServeMux
 // Applies the same authentication and authorization (if any is configured)
 // to the request is used for the GenericAPIServer's built-in endpoints.
@@ -266,7 +258,7 @@ func (s *GenericAPIServer) Run(options *options.ServerRunOptions) {
 			options.TLSPrivateKeyFile = path.Join(options.CertDirectory, "apiserver.key")
 			// TODO (cjcullen): Is ClusterIP the right address to sign a cert with?
 			alternateIPs := []net.IP{s.ServiceReadWriteIP}
-			alternateDNS := []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}
+			alternateDNS := []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes", "localhost"}
 			// It would be nice to set a fqdn subject alt name, but only the kubelets know, the apiserver is clueless
 			// alternateDNS = append(alternateDNS, "kubernetes.default.svc.CLUSTER.DNS.NAME")
 			if !certutil.CanReadCertOrKey(options.TLSCertFile, options.TLSPrivateKeyFile) {
@@ -452,8 +444,6 @@ func (s *GenericAPIServer) getAPIGroupVersion(apiGroupInfo *APIGroupInfo, groupV
 
 func (s *GenericAPIServer) newAPIGroupVersion(apiGroupInfo *APIGroupInfo, groupVersion unversioned.GroupVersion) (*apiserver.APIGroupVersion, error) {
 	return &apiserver.APIGroupVersion{
-		RequestInfoResolver: s.NewRequestInfoResolver(),
-
 		GroupVersion: groupVersion,
 
 		ParameterCodec: apiGroupInfo.ParameterCodec,
