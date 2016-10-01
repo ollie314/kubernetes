@@ -41,6 +41,7 @@ import (
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	unversionedcore "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/unversioned"
 	"k8s.io/kubernetes/pkg/client/leaderelection"
+	"k8s.io/kubernetes/pkg/client/leaderelection/resourcelock"
 	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/client/restclient"
 	"k8s.io/kubernetes/pkg/client/typed/dynamic"
@@ -179,14 +180,21 @@ func Run(s *options.CMServer) error {
 		return err
 	}
 
-	leaderelection.RunOrDie(leaderelection.LeaderElectionConfig{
+	// TODO: enable other lock types
+	rl := resourcelock.EndpointsLock{
 		EndpointsMeta: api.ObjectMeta{
 			Namespace: "kube-system",
 			Name:      "kube-controller-manager",
 		},
-		Client:        leaderElectionClient,
-		Identity:      id,
-		EventRecorder: recorder,
+		Client: leaderElectionClient,
+		LockConfig: resourcelock.ResourceLockConfig{
+			Identity:      id,
+			EventRecorder: recorder,
+		},
+	}
+
+	leaderelection.RunOrDie(leaderelection.LeaderElectionConfig{
+		Lock:          &rl,
 		LeaseDuration: s.LeaderElection.LeaseDuration.Duration,
 		RenewDeadline: s.LeaderElection.RenewDeadline.Duration,
 		RetryPeriod:   s.LeaderElection.RetryPeriod.Duration,
@@ -240,7 +248,9 @@ func StartControllers(s *options.CMServer, kubeconfig *restclient.Config, stop <
 	if err != nil {
 		glog.Warningf("Unsuccessful parsing of service CIDR %v: %v", s.ServiceCIDR, err)
 	}
-	nodeController, err := nodecontroller.NewNodeController(sharedInformers.Pods().Informer(), cloud, client("node-controller"),
+	nodeController, err := nodecontroller.NewNodeController(
+		sharedInformers.Pods(), sharedInformers.Nodes(), sharedInformers.DaemonSets(),
+		cloud, client("node-controller"),
 		s.PodEvictionTimeout.Duration, s.NodeEvictionRate, s.SecondaryNodeEvictionRate, s.LargeClusterSizeThreshold, s.UnhealthyZoneThreshold, s.NodeMonitorGracePeriod.Duration,
 		s.NodeStartupGracePeriod.Duration, s.NodeMonitorPeriod.Duration, clusterCIDR, serviceCIDR,
 		int(s.NodeCIDRMaskSize), s.AllocateNodeCIDRs)
