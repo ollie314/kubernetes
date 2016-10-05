@@ -54,10 +54,11 @@ const (
 var internalLabelKeys []string = []string{containerTypeLabelKey, sandboxIDLabelKey}
 
 // NOTE: Anything passed to DockerService should be eventually handled in another way when we switch to running the shim as a different process.
-func NewDockerService(client dockertools.DockerInterface, seccompProfileRoot string) DockerLegacyService {
+func NewDockerService(client dockertools.DockerInterface, seccompProfileRoot string, podSandboxImage string) DockerLegacyService {
 	return &dockerService{
 		seccompProfileRoot: seccompProfileRoot,
 		client:             dockertools.NewInstrumentedDockerInterface(client),
+		podSandboxImage:    podSandboxImage,
 	}
 }
 
@@ -71,7 +72,7 @@ type DockerLegacyService interface {
 	// Supporting legacy methods for docker.
 	GetContainerLogs(pod *api.Pod, containerID kubecontainer.ContainerID, logOptions *api.PodLogOptions, stdout, stderr io.Writer) (err error)
 	kubecontainer.ContainerAttacher
-	PortForward(pod *kubecontainer.Pod, port uint16, stream io.ReadWriteCloser) error
+	PortForward(sandboxID string, port uint16, stream io.ReadWriteCloser) error
 
 	// TODO: Remove this once exec is properly defined in CRI.
 	ExecInContainer(containerID kubecontainer.ContainerID, cmd []string, stdin io.Reader, stdout, stderr io.WriteCloser, tty bool, resize <-chan term.Size) error
@@ -80,6 +81,7 @@ type DockerLegacyService interface {
 type dockerService struct {
 	seccompProfileRoot string
 	client             dockertools.DockerInterface
+	podSandboxImage    string
 }
 
 // Version returns the runtime name, runtime version and runtime API version

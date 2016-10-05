@@ -14,32 +14,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package kubectl
+package fake
 
 import (
-	"os"
-	"os/signal"
-
-	"k8s.io/kubernetes/pkg/watch"
+	"k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 )
 
-// WatchLoop loops, passing events in w to fn.
-// If user sends interrupt signal, shut down cleanly. Otherwise, never return.
-func WatchLoop(w watch.Interface, fn func(watch.Event) error) {
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt)
-	defer signal.Stop(signals)
-	for {
-		select {
-		case event, ok := <-w.ResultChan():
-			if !ok {
-				return
-			}
-			if err := fn(event); err != nil {
-				w.Stop()
-			}
-		case <-signals:
-			w.Stop()
-		}
-	}
+func (c *FakeDeployments) Rollback(deploymentRollback *v1beta1.DeploymentRollback) error {
+	action := core.CreateActionImpl{}
+	action.Verb = "create"
+	action.Resource = deploymentsResource
+	action.Subresource = "rollback"
+	action.Object = deploymentRollback
+
+	_, err := c.Fake.Invokes(action, deploymentRollback)
+	return err
 }
