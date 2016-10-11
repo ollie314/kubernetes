@@ -1052,6 +1052,61 @@ __EOF__
   kubectl delete pods selector-test-pod
 
 
+  ## kubectl apply --prune
+  # Pre-Condition: no POD exists
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+
+  # apply a
+  kubectl apply --prune -l prune-group=true -f hack/testdata/prune/a.yaml "${kube_flags[@]}"
+  # check right pod exists
+  kube::test::get_object_assert 'pods a' "{{${id_field}}}" 'a'
+  # check wrong pod doesn't exist
+  output_message=$(! kubectl get pods b 2>&1 "${kube_flags[@]}")
+  kube::test::if_has_string "${output_message}" 'pods "b" not found'
+
+  # apply b
+  kubectl apply --prune -l prune-group=true -f hack/testdata/prune/b.yaml "${kube_flags[@]}"
+  # check right pod exists
+  kube::test::get_object_assert 'pods b' "{{${id_field}}}" 'b'
+  # check wrong pod doesn't exist
+  output_message=$(! kubectl get pods a 2>&1 "${kube_flags[@]}")
+  kube::test::if_has_string "${output_message}" 'pods "a" not found'
+
+  # cleanup
+  kubectl delete pods b
+
+  # same thing without prune for a sanity check
+  # Pre-Condition: no POD exists
+  kube::test::get_object_assert pods "{{range.items}}{{$id_field}}:{{end}}" ''
+
+  # apply a
+  kubectl apply -l prune-group=true -f hack/testdata/prune/a.yaml "${kube_flags[@]}"
+  # check right pod exists
+  kube::test::get_object_assert 'pods a' "{{${id_field}}}" 'a'
+  # check wrong pod doesn't exist
+  output_message=$(! kubectl get pods b 2>&1 "${kube_flags[@]}")
+  kube::test::if_has_string "${output_message}" 'pods "b" not found'
+
+  # apply b
+  kubectl apply -l prune-group=true -f hack/testdata/prune/b.yaml "${kube_flags[@]}"
+  # check both pods exist
+  kube::test::get_object_assert 'pods a' "{{${id_field}}}" 'a'
+  kube::test::get_object_assert 'pods b' "{{${id_field}}}" 'b'
+  # check wrong pod doesn't exist
+
+  # cleanup
+  kubectl delete pod/a pod/b
+
+  ## kubectl apply --prune requires a --all flag to select everything
+  output_message=$(! kubectl apply --prune -f hack/testdata/prune 2>&1 "${kube_flags[@]}")
+  kube::test::if_has_string "${output_message}" \
+    'all resources selected for prune without explicitly passing --all'
+  # should apply everything
+  kubectl apply --all --prune -f hack/testdata/prune
+  kube::test::get_object_assert 'pods a' "{{${id_field}}}" 'a'
+  kube::test::get_object_assert 'pods b' "{{${id_field}}}" 'b'
+  kubectl delete pod/a pod/b
+
   ## kubectl run should create deployments or jobs
   # Pre-Condition: no Job exists
   kube::test::get_object_assert jobs "{{range.items}}{{$id_field}}:{{end}}" ''
@@ -1161,7 +1216,7 @@ __EOF__
   ]
 }
 __EOF__
-  
+
   # Post-Condition: assertion object exist
   kube::test::get_object_assert thirdpartyresources "{{range.items}}{{$id_field}}:{{end}}" 'bar.company.com:foo.company.com:'
 
@@ -1630,6 +1685,51 @@ __EOF__
   kubectl delete namespace test-configmaps
 
   ####################
+  # Client Config    #
+  ####################
+
+  # Command
+  # Pre-condition: kubeconfig "missing" is not a file or directory
+  output_message=$(! kubectl get pod --context="" --kubeconfig=missing 2>&1)
+  kube::test::if_has_string "${output_message}" "missing: no such file or directory"
+
+  # Pre-condition: kubeconfig "missing" is not a file or directory
+  # Command
+  output_message=$(! kubectl get pod --user="" --kubeconfig=missing 2>&1)
+  # Post-condition: --user contains a valid / empty value, missing config file returns error
+  kube::test::if_has_string "${output_message}" "missing: no such file or directory"
+  # Command
+  output_message=$(! kubectl get pod --cluster="" --kubeconfig=missing 2>&1)
+  # Post-condition: --cluster contains a "valid" value, missing config file returns error
+  kube::test::if_has_string "${output_message}" "missing: no such file or directory"
+
+  # Pre-condition: context "missing-context" does not exist
+  # Command
+  output_message=$(! kubectl get pod --context="missing-context" 2>&1)
+  kube::test::if_has_string "${output_message}" 'context "missing-context" does not exist'
+  # Post-condition: invalid or missing context returns error
+
+  # Pre-condition: cluster "missing-cluster" does not exist
+  # Command
+  output_message=$(! kubectl get pod --cluster="missing-cluster" 2>&1)
+  kube::test::if_has_string "${output_message}" 'cluster "missing-cluster" does not exist'
+  # Post-condition: invalid or missing cluster returns error
+
+  # Pre-condition: user "missing-user" does not exist
+  # Command
+  output_message=$(! kubectl get pod --user="missing-user" 2>&1)
+  kube::test::if_has_string "${output_message}" 'auth info "missing-user" does not exist'
+  # Post-condition: invalid or missing user returns error
+
+  # test invalid config
+  kubectl config view | sed -E "s/apiVersion: .*/apiVersion: v-1/g" > "${TMPDIR:-/tmp}"/newconfig.yaml
+  output_message=$(! "${KUBE_OUTPUT_HOSTBIN}/kubectl" get pods --context="" --user="" --kubeconfig=/tmp/newconfig.yaml 2>&1)
+  kube::test::if_has_string "${output_message}" "Error loading config file"
+
+  output_message=$(! kubectl get pod --kubeconfig=missing-config 2>&1)
+  kube::test::if_has_string "${output_message}" 'no such file or directory'
+
+  ####################
   # Service Accounts #
   ####################
 
@@ -2066,6 +2166,10 @@ __EOF__
   kubectl-with-retry rollout resume deployment nginx "${kube_flags[@]}"
   # The resumed deployment can now be rolled back
   kubectl rollout undo deployment nginx "${kube_flags[@]}"
+  # Check that the new replica set (nginx-618515232) has all old revisions stored in an annotation
+  kubectl get rs nginx-618515232 -o yaml | grep "deployment.kubernetes.io/revision-history: 1,3"
+  # Check that trying to watch the status of a superseded revision returns an error
+  ! kubectl rollout status deployment/nginx --revision=3
   # Clean up
   kubectl delete deployment nginx "${kube_flags[@]}"
 

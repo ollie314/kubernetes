@@ -16,10 +16,8 @@ limitations under the License.
 
 package api
 
-func ValidateMasterConfiguration(o *MasterConfiguration) error {
-	return nil
-}
-
-func ValidateNodeConfiguration(o *MasterConfiguration) error {
-	return nil
-}
+const (
+	DefaultServiceDNSDomain  = "cluster.local"
+	DefaultServicesSubnet    = "10.12.0.0/12"
+	DefaultKubernetesVersion = "v1.4.1"
+)

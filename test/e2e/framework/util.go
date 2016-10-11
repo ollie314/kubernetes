@@ -79,6 +79,7 @@ import (
 	utilyaml "k8s.io/kubernetes/pkg/util/yaml"
 	"k8s.io/kubernetes/pkg/version"
 	"k8s.io/kubernetes/pkg/watch"
+	testutil "k8s.io/kubernetes/test/utils"
 
 	"github.com/blang/semver"
 	"golang.org/x/crypto/ssh"
@@ -677,7 +678,7 @@ func WaitForPodsRunningReady(c *client.Client, ns string, minPods int32, timeout
 				}
 			} else {
 				if pod.Status.Phase != api.PodFailed {
-					Logf("The status of Pod %s is %s, waiting for it to be either Running or Failed", pod.ObjectMeta.Name, pod.Status.Phase)
+					Logf("The status of Pod %s is %s (Ready = false), waiting for it to be either Running (with Ready = true) or Failed", pod.ObjectMeta.Name, pod.Status.Phase)
 					badPods = append(badPods, pod)
 				} else if !hasReplicationControllersForPod(rcList, pod) {
 					Logf("Pod %s is Failed, but it's not controlled by a ReplicationController", pod.ObjectMeta.Name)
@@ -1945,18 +1946,7 @@ func loadClientFromConfig(config *restclient.Config) (*client.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating client: %v", err.Error())
 	}
-	if c.Client.Timeout == 0 {
-		c.Client.Timeout = SingleCallTimeout
-	}
 	return c, nil
-}
-
-func setTimeouts(cs ...*http.Client) {
-	for _, client := range cs {
-		if client.Timeout == 0 {
-			client.Timeout = SingleCallTimeout
-		}
-	}
 }
 
 func LoadFederationClientset_1_5() (*federation_release_1_5.Clientset, error) {
@@ -1969,8 +1959,6 @@ func LoadFederationClientset_1_5() (*federation_release_1_5.Clientset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating federation clientset: %v", err.Error())
 	}
-	// Set timeout for each client in the set.
-	setTimeouts(c.DiscoveryClient.Client, c.FederationClient.Client, c.CoreClient.Client, c.ExtensionsClient.Client)
 	return c, nil
 }
 
@@ -3035,64 +3023,25 @@ func WaitForAllNodesSchedulable(c *client.Client) error {
 	})
 }
 
-func AddOrUpdateLabelOnNode(c *client.Client, nodeName string, labelKey string, labelValue string) {
-	patch := fmt.Sprintf(`{"metadata":{"labels":{"%s":"%s"}}}`, labelKey, labelValue)
-	var err error
-	for attempt := 0; attempt < UpdateRetries; attempt++ {
-		err = c.Patch(api.MergePatchType).Resource("nodes").Name(nodeName).Body([]byte(patch)).Do().Error()
-		if err != nil {
-			if !apierrs.IsConflict(err) {
-				ExpectNoError(err)
-			} else {
-				Logf("Conflict when trying to add a label %v:%v to %v", labelKey, labelValue, nodeName)
-			}
-		} else {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	ExpectNoError(err)
+func AddOrUpdateLabelOnNode(c clientset.Interface, nodeName string, labelKey, labelValue string) {
+	ExpectNoError(testutil.AddLabelsToNode(c, nodeName, map[string]string{labelKey: labelValue}))
 }
 
-func ExpectNodeHasLabel(c *client.Client, nodeName string, labelKey string, labelValue string) {
+func ExpectNodeHasLabel(c clientset.Interface, nodeName string, labelKey string, labelValue string) {
 	By("verifying the node has the label " + labelKey + " " + labelValue)
-	node, err := c.Nodes().Get(nodeName)
+	node, err := c.Core().Nodes().Get(nodeName)
 	ExpectNoError(err)
 	Expect(node.Labels[labelKey]).To(Equal(labelValue))
 }
 
 // RemoveLabelOffNode is for cleaning up labels temporarily added to node,
 // won't fail if target label doesn't exist or has been removed.
-func RemoveLabelOffNode(c *client.Client, nodeName string, labelKey string) {
+func RemoveLabelOffNode(c clientset.Interface, nodeName string, labelKey string) {
 	By("removing the label " + labelKey + " off the node " + nodeName)
-	var nodeUpdated *api.Node
-	var node *api.Node
-	var err error
-	for attempt := 0; attempt < UpdateRetries; attempt++ {
-		node, err = c.Nodes().Get(nodeName)
-		ExpectNoError(err)
-		if node.Labels == nil || len(node.Labels[labelKey]) == 0 {
-			return
-		}
-		delete(node.Labels, labelKey)
-		nodeUpdated, err = c.Nodes().Update(node)
-		if err != nil {
-			if !apierrs.IsConflict(err) {
-				ExpectNoError(err)
-			} else {
-				Logf("Conflict when trying to remove a label %v from %v", labelKey, nodeName)
-			}
-		} else {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	ExpectNoError(err)
+	ExpectNoError(testutil.RemoveLabelOffNode(c, nodeName, []string{labelKey}))
 
 	By("verifying the node doesn't have the label " + labelKey)
-	if nodeUpdated.Labels != nil && len(nodeUpdated.Labels[labelKey]) != 0 {
-		Failf("Failed removing label " + labelKey + " of the node " + nodeName)
-	}
+	ExpectNoError(testutil.VerifyLabelsRemoved(c, nodeName, []string{labelKey}))
 }
 
 func AddOrUpdateTaintOnNode(c *client.Client, nodeName string, taint api.Taint) {
@@ -3542,7 +3491,7 @@ func WaitForDeploymentStatusValid(c clientset.Interface, d *extensions.Deploymen
 		reason                    string
 	)
 
-	err := wait.Poll(Poll, 2*time.Minute, func() (bool, error) {
+	err := wait.Poll(Poll, 5*time.Minute, func() (bool, error) {
 		var err error
 		deployment, err = c.Extensions().Deployments(d.Namespace).Get(d.Name)
 		if err != nil {

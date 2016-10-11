@@ -169,7 +169,7 @@ func NewReplicaSetController(federationClient fedclientset.Interface) *ReplicaSe
 	}
 	frsc.fedPodInformer = fedutil.NewFederatedInformer(federationClient, podFedInformerFactory, &fedutil.ClusterLifecycleHandlerFuncs{})
 
-	frsc.replicaSetStore.Store, frsc.replicaSetController = cache.NewInformer(
+	frsc.replicaSetStore.Indexer, frsc.replicaSetController = cache.NewIndexerInformer(
 		&cache.ListWatch{
 			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
 				versionedOptions := fedutil.VersionizeV1ListOptions(options)
@@ -185,6 +185,7 @@ func NewReplicaSetController(federationClient fedclientset.Interface) *ReplicaSe
 		fedutil.NewTriggerOnMetaAndSpecChanges(
 			func(obj runtime.Object) { frsc.deliverFedReplicaSetObj(obj, replicaSetReviewDelay) },
 		),
+		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 	)
 
 	frsc.fedUpdater = fedutil.NewFederatedUpdater(frsc.fedReplicaSetInformer,
@@ -227,14 +228,7 @@ func (frsc *ReplicaSetController) Run(workers int, stopCh <-chan struct{}) {
 		go wait.Until(frsc.worker, time.Second, stopCh)
 	}
 
-	go func() {
-		select {
-		case <-time.After(time.Minute):
-			frsc.replicaSetBackoff.GC()
-		case <-stopCh:
-			return
-		}
-	}()
+	fedutil.StartBackoffGC(frsc.replicaSetBackoff, stopCh)
 
 	<-stopCh
 	glog.Infof("Shutting down ReplicaSetController")
@@ -291,7 +285,7 @@ func (frsc *ReplicaSetController) deliverLocalReplicaSet(obj interface{}, durati
 		glog.Errorf("Couldn't get key for object %v: %v", obj, err)
 		return
 	}
-	_, exists, err := frsc.replicaSetStore.Store.GetByKey(key)
+	_, exists, err := frsc.replicaSetStore.Indexer.GetByKey(key)
 	if err != nil {
 		glog.Errorf("Couldn't get federation replicaset %v: %v", key, err)
 		return
@@ -419,7 +413,7 @@ func (frsc *ReplicaSetController) reconcileReplicaSet(key string) (reconciliatio
 	startTime := time.Now()
 	defer glog.V(4).Infof("Finished reconcile replicaset %q (%v)", key, time.Now().Sub(startTime))
 
-	obj, exists, err := frsc.replicaSetStore.Store.GetByKey(key)
+	obj, exists, err := frsc.replicaSetStore.Indexer.GetByKey(key)
 	if err != nil {
 		return statusError, err
 	}
@@ -439,7 +433,7 @@ func (frsc *ReplicaSetController) reconcileReplicaSet(key string) (reconciliatio
 	if err != nil {
 		return statusError, err
 	}
-	podStatus, err := AnalysePods(frs, allPods, time.Now())
+	podStatus, err := AnalysePods(frs.Spec.Selector, allPods, time.Now())
 	current := make(map[string]int64)
 	estimatedCapacity := make(map[string]int64)
 	for _, cluster := range clusters {
@@ -536,7 +530,7 @@ func (frsc *ReplicaSetController) reconcileReplicaSetsOnClusterChange() {
 	if !frsc.isSynced() {
 		frsc.clusterDeliverer.DeliverAfter(allClustersKey, nil, clusterAvailableDelay)
 	}
-	rss := frsc.replicaSetStore.Store.List()
+	rss := frsc.replicaSetStore.Indexer.List()
 	for _, rs := range rss {
 		key, _ := controller.KeyFunc(rs)
 		frsc.deliverReplicaSetByKey(key, 0, false)

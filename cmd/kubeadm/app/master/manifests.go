@@ -24,7 +24,7 @@ import (
 	"path"
 	"strings"
 
-	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/api"
+	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	"k8s.io/kubernetes/cmd/kubeadm/app/images"
 	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/unversioned"
@@ -296,7 +296,9 @@ func getComponentCommand(component string, s *kubeadmapi.MasterConfiguration) (c
 		}
 		// Let the controller-manager allocate Node CIDRs for the Pod network.
 		// Each node will get a subspace of the address CIDR provided with --pod-network-cidr.
-		command = append(command, "--allocate-node-cidrs=true", "--cluster-cidr="+s.Networking.PodSubnet)
+		if s.Networking.PodSubnet != "" {
+			command = append(command, "--allocate-node-cidrs=true", "--cluster-cidr="+s.Networking.PodSubnet)
+		}
 	}
 
 	return

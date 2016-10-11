@@ -56,6 +56,7 @@ cadvisor-port
 cert-dir
 certificate-authority
 cgroup-root
+cgroup-driver
 cgroups-per-qos
 chaos-chance
 clean-start
@@ -118,6 +119,7 @@ delete-collection-workers
 delete-instances
 delete-local-data
 delete-namespace
+delete-namespace-on-failure
 deleting-pods-burst
 deleting-pods-qps
 deployment-controller-sync-period
@@ -384,6 +386,7 @@ node-monitor-period
 node-name
 node-os-distro
 node-path-override
+node-port
 node-startup-grace-period
 node-status-update-frequency
 node-sync-period
