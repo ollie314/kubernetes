@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"sort"
 	"time"
 
@@ -29,9 +28,9 @@ import (
 	fed "k8s.io/kubernetes/federation/apis/federation"
 	fedv1 "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	fedclientset "k8s.io/kubernetes/federation/client/clientset_generated/federation_release_1_5"
-	"k8s.io/kubernetes/federation/pkg/federation-controller/replicaset/planner"
 	fedutil "k8s.io/kubernetes/federation/pkg/federation-controller/util"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util/eventsink"
+	"k8s.io/kubernetes/federation/pkg/federation-controller/util/planner"
 	"k8s.io/kubernetes/federation/pkg/federation-controller/util/podanalyzer"
 	"k8s.io/kubernetes/pkg/api"
 	apiv1 "k8s.io/kubernetes/pkg/api/v1"
@@ -489,8 +488,7 @@ func (fdc *DeploymentController) reconcileDeployment(key string) (reconciliation
 
 			currentLd := ldObj.(*extensionsv1.Deployment)
 			// Update existing replica set, if needed.
-			if !fedutil.ObjectMetaEquivalent(ld.ObjectMeta, currentLd.ObjectMeta) ||
-				!reflect.DeepEqual(ld.Spec, currentLd.Spec) {
+			if !fedutil.ObjectMetaAndSpecEquivalent(ld, currentLd) {
 				fdc.eventRecorder.Eventf(fd, api.EventTypeNormal, "UpdateInCluster",
 					"Updating deployment in cluster %s", clusterName)
 
