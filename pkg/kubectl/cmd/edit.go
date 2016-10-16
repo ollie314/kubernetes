@@ -39,6 +39,7 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/crlf"
 	"k8s.io/kubernetes/pkg/util/strategicpatch"
+	"k8s.io/kubernetes/pkg/util/validation/field"
 	"k8s.io/kubernetes/pkg/util/yaml"
 
 	"github.com/golang/glog"
@@ -78,8 +79,6 @@ var (
 		  kubectl edit svc/docker-registry --output-version=v1 -o json`)
 )
 
-var errExit = fmt.Errorf("exit directly")
-
 func NewCmdEdit(f cmdutil.Factory, out, errOut io.Writer) *cobra.Command {
 	options := &resource.FilenameOptions{}
 
@@ -101,9 +100,6 @@ func NewCmdEdit(f cmdutil.Factory, out, errOut io.Writer) *cobra.Command {
 		Example: fmt.Sprintf(editExample),
 		Run: func(cmd *cobra.Command, args []string) {
 			err := RunEdit(f, out, errOut, cmd, args, options)
-			if err == errExit {
-				os.Exit(1)
-			}
 			cmdutil.CheckErr(err)
 		},
 		ValidArgs:  validArgs,
@@ -128,6 +124,9 @@ func RunEdit(f cmdutil.Factory, out, errOut io.Writer, cmd *cobra.Command, args 
 	}
 
 	mapper, resourceMapper, r, cmdNamespace, err := getMapperAndResult(f, args, options)
+	if err != nil {
+		return err
+	}
 
 	clientConfig, err := f.ClientConfig()
 	if err != nil {
@@ -216,7 +215,12 @@ func RunEdit(f cmdutil.Factory, out, errOut io.Writer, cmd *cobra.Command, args 
 			}
 			err = schema.ValidateBytes(stripComments(edited))
 			if err != nil {
-				return preservedFile(err, file, errOut)
+				results = editResults{
+					file: file,
+				}
+				containsError = true
+				fmt.Fprintln(out, results.addError(errors.NewInvalid(api.Kind(""), "", field.ErrorList{field.Invalid(nil, "The edited file failed validation", fmt.Sprintf("%v", err))}), info))
+				continue
 			}
 
 			// Compare content without comments
@@ -279,11 +283,11 @@ func RunEdit(f cmdutil.Factory, out, errOut io.Writer, cmd *cobra.Command, args 
 			// 3. invalid: retry those on the spot by looping ie. reloading the editor
 			if results.retryable > 0 {
 				fmt.Fprintf(errOut, "You can run `%s replace -f %s` to try this update again.\n", filepath.Base(os.Args[0]), file)
-				return errExit
+				return cmdutil.ErrExit
 			}
 			if results.notfound > 0 {
 				fmt.Fprintf(errOut, "The edits you made on deleted resources have been saved to %q\n", file)
-				return errExit
+				return cmdutil.ErrExit
 			}
 
 			if len(results.edit) == 0 {
@@ -295,8 +299,9 @@ func RunEdit(f cmdutil.Factory, out, errOut io.Writer, cmd *cobra.Command, args 
 				return nil
 			}
 
-			// loop again and edit the remaining items
-			infos = results.edit
+			if len(results.header.reasons) > 0 {
+				containsError = true
+			}
 		}
 	})
 	return err
