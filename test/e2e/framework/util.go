@@ -2145,16 +2145,15 @@ func (f *Framework) MatchContainerOutput(
 	podClient := f.PodClient()
 	ns := f.Namespace.Name
 
-	defer podClient.Delete(pod.Name, api.NewDeleteOptions(0))
-	podClient.Create(pod)
+	createdPod := podClient.Create(pod)
 
 	// Wait for client pod to complete.
-	if err := WaitForPodSuccessInNamespace(f.Client, pod.Name, ns); err != nil {
+	if err := WaitForPodSuccessInNamespace(f.Client, createdPod.Name, ns); err != nil {
 		return fmt.Errorf("expected pod %q success: %v", pod.Name, err)
 	}
 
 	// Grab its logs.  Get host first.
-	podStatus, err := podClient.Get(pod.Name)
+	podStatus, err := podClient.Get(createdPod.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get pod status: %v", err)
 	}
@@ -2163,7 +2162,7 @@ func (f *Framework) MatchContainerOutput(
 		podStatus.Spec.NodeName, podStatus.Name, containerName, err)
 
 	// Sometimes the actual containers take a second to get started, try to get logs for 60s
-	logs, err := GetPodLogs(f.Client, ns, pod.Name, containerName)
+	logs, err := GetPodLogs(f.Client, ns, podStatus.Name, containerName)
 	if err != nil {
 		Logf("Failed to get logs from node %q pod %q container %q. %v",
 			podStatus.Spec.NodeName, podStatus.Name, containerName, err)
@@ -2337,11 +2336,11 @@ func getNodeEvents(c *client.Client, nodeName string) []api.Event {
 }
 
 // waitListSchedulableNodesOrDie is a wrapper around listing nodes supporting retries.
-func waitListSchedulableNodesOrDie(c *client.Client) *api.NodeList {
+func waitListSchedulableNodesOrDie(c clientset.Interface) *api.NodeList {
 	var nodes *api.NodeList
 	var err error
 	if wait.PollImmediate(Poll, SingleCallTimeout, func() (bool, error) {
-		nodes, err = c.Nodes().List(api.ListOptions{FieldSelector: fields.Set{
+		nodes, err = c.Core().Nodes().List(api.ListOptions{FieldSelector: fields.Set{
 			"spec.unschedulable": "false",
 		}.AsSelector()})
 		return err == nil, nil
@@ -2366,7 +2365,7 @@ func isNodeSchedulable(node *api.Node) bool {
 // 1) Needs to be schedulable.
 // 2) Needs to be ready.
 // If EITHER 1 or 2 is not true, most tests will want to ignore the node entirely.
-func GetReadySchedulableNodesOrDie(c *client.Client) (nodes *api.NodeList) {
+func GetReadySchedulableNodesOrDie(c clientset.Interface) (nodes *api.NodeList) {
 	nodes = waitListSchedulableNodesOrDie(c)
 	// previous tests may have cause failures of some nodes. Let's skip
 	// 'Not Ready' nodes, just in case (there is no need to fail the test).
@@ -2880,10 +2879,6 @@ func WaitForDeploymentStatusValid(c clientset.Interface, d *extensions.Deploymen
 			}
 		}
 		totalCreated := deploymentutil.GetReplicaCountForReplicaSets(allRSs)
-		totalAvailable, err := deploymentutil.GetAvailablePodsForDeployment(c, deployment)
-		if err != nil {
-			return false, err
-		}
 		maxCreated := deployment.Spec.Replicas + deploymentutil.MaxSurge(*deployment)
 		if totalCreated > maxCreated {
 			reason = fmt.Sprintf("total pods created: %d, more than the max allowed: %d", totalCreated, maxCreated)
@@ -2891,12 +2886,23 @@ func WaitForDeploymentStatusValid(c clientset.Interface, d *extensions.Deploymen
 			return false, nil
 		}
 		minAvailable := deploymentutil.MinAvailable(deployment)
-		if totalAvailable < minAvailable {
-			reason = fmt.Sprintf("total pods available: %d, less than the min required: %d", totalAvailable, minAvailable)
+		if deployment.Status.AvailableReplicas < minAvailable {
+			reason = fmt.Sprintf("total pods available: %d, less than the min required: %d", deployment.Status.AvailableReplicas, minAvailable)
 			Logf(reason)
 			return false, nil
 		}
-		return true, nil
+
+		// When the deployment status and its underlying resources reach the desired state, we're done
+		if deployment.Status.Replicas == deployment.Spec.Replicas &&
+			deployment.Status.UpdatedReplicas == deployment.Spec.Replicas &&
+			deployment.Status.AvailableReplicas == deployment.Spec.Replicas {
+			return true, nil
+		}
+
+		reason = fmt.Sprintf("deployment status: %#v", deployment.Status)
+		Logf(reason)
+
+		return false, nil
 	})
 
 	if err == wait.ErrWaitTimeout {
@@ -2941,10 +2947,6 @@ func WaitForDeploymentStatus(c clientset.Interface, d *extensions.Deployment) er
 			}
 		}
 		totalCreated := deploymentutil.GetReplicaCountForReplicaSets(allRSs)
-		totalAvailable, err := deploymentutil.GetAvailablePodsForDeployment(c, deployment)
-		if err != nil {
-			return false, err
-		}
 		maxCreated := deployment.Spec.Replicas + deploymentutil.MaxSurge(*deployment)
 		if totalCreated > maxCreated {
 			logReplicaSetsOfDeployment(deployment, allOldRSs, newRS)
@@ -2952,17 +2954,15 @@ func WaitForDeploymentStatus(c clientset.Interface, d *extensions.Deployment) er
 			return false, fmt.Errorf("total pods created: %d, more than the max allowed: %d", totalCreated, maxCreated)
 		}
 		minAvailable := deploymentutil.MinAvailable(deployment)
-		if totalAvailable < minAvailable {
+		if deployment.Status.AvailableReplicas < minAvailable {
 			logReplicaSetsOfDeployment(deployment, allOldRSs, newRS)
 			logPodsOfDeployment(c, deployment)
-			return false, fmt.Errorf("total pods available: %d, less than the min required: %d", totalAvailable, minAvailable)
+			return false, fmt.Errorf("total pods available: %d, less than the min required: %d", deployment.Status.AvailableReplicas, minAvailable)
 		}
 
 		// When the deployment status and its underlying resources reach the desired state, we're done
 		if deployment.Status.Replicas == deployment.Spec.Replicas &&
-			deployment.Status.UpdatedReplicas == deployment.Spec.Replicas &&
-			deploymentutil.GetReplicaCountForReplicaSets(oldRSs) == 0 &&
-			deploymentutil.GetReplicaCountForReplicaSets([]*extensions.ReplicaSet{newRS}) == deployment.Spec.Replicas {
+			deployment.Status.UpdatedReplicas == deployment.Spec.Replicas {
 			return true, nil
 		}
 		return false, nil
@@ -3254,7 +3254,7 @@ func NodeAddresses(nodelist *api.NodeList, addrType api.NodeAddressType) []strin
 // NodeSSHHosts returns SSH-able host names for all schedulable nodes - this excludes master node.
 // It returns an error if it can't find an external IP for every node, though it still returns all
 // hosts that it found in that case.
-func NodeSSHHosts(c *client.Client) ([]string, error) {
+func NodeSSHHosts(c clientset.Interface) ([]string, error) {
 	nodelist := waitListSchedulableNodesOrDie(c)
 
 	// TODO(roberthbailey): Use the "preferred" address for the node, once such a thing is defined (#2462).
@@ -4320,7 +4320,6 @@ func CheckConnectivityToHost(f *Framework, nodeName, podName, host string, timeo
 	if err != nil {
 		return err
 	}
-	defer podClient.Delete(podName, nil)
 	err = WaitForPodSuccessInNamespace(f.Client, podName, f.Namespace.Name)
 
 	if err != nil {

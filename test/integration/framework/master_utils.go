@@ -61,6 +61,7 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/storage/storagebackend"
 	"k8s.io/kubernetes/pkg/util/wait"
+	"k8s.io/kubernetes/pkg/version"
 	"k8s.io/kubernetes/pkg/watch"
 	"k8s.io/kubernetes/plugin/pkg/admission/admit"
 	authenticatorunion "k8s.io/kubernetes/plugin/pkg/auth/authenticator/request/union"
@@ -344,6 +345,8 @@ func NewMasterConfig() *master.Config {
 		NewSingleContentTypeSerializer(api.Scheme, testapi.Storage.Codec(), runtime.ContentTypeJSON))
 
 	genericConfig := genericapiserver.NewConfig()
+	kubeVersion := version.Get()
+	genericConfig.Version = &kubeVersion
 	genericConfig.APIResourceConfigSource = master.DefaultAPIResourceConfigSource()
 	genericConfig.Authorizer = authorizer.NewAlwaysAllowAuthorizer()
 	genericConfig.AdmissionControl = admit.NewAlwaysAdmit()
@@ -354,7 +357,7 @@ func NewMasterConfig() *master.Config {
 		StorageFactory:        storageFactory,
 		EnableCoreControllers: true,
 		EnableWatchCache:      true,
-		KubeletClient:         kubeletclient.FakeKubeletClient{},
+		KubeletClientConfig:   kubeletclient.KubeletClientConfig{Port: 10250},
 	}
 }
 

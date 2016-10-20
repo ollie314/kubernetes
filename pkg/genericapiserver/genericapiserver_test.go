@@ -42,6 +42,7 @@ import (
 	etcdtesting "k8s.io/kubernetes/pkg/storage/etcd/testing"
 	utilnet "k8s.io/kubernetes/pkg/util/net"
 	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/kubernetes/pkg/version"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -56,7 +57,6 @@ func setUp(t *testing.T) (*etcdtesting.EtcdTestServer, Config, *assert.Assertion
 	config.ProxyDialer = func(network, addr string) (net.Conn, error) { return nil, nil }
 	config.ProxyTLSClientConfig = &tls.Config{}
 	config.LegacyAPIGroupPrefixes = sets.NewString("/api")
-	config.APIGroupPrefix = "/apis"
 
 	return etcdServer, *config, assert.New(t)
 }
@@ -80,7 +80,6 @@ func TestNew(t *testing.T) {
 	// Verify many of the variables match their config counterparts
 	assert.Equal(s.enableSwaggerSupport, config.EnableSwaggerSupport)
 	assert.Equal(s.legacyAPIGroupPrefixes, config.LegacyAPIGroupPrefixes)
-	assert.Equal(s.apiPrefix, config.APIGroupPrefix)
 	assert.Equal(s.admissionControl, config.AdmissionControl)
 	assert.Equal(s.RequestContextMapper(), config.RequestContextMapper)
 
@@ -105,7 +104,6 @@ func TestInstallAPIGroups(t *testing.T) {
 	defer etcdserver.Terminate(t)
 
 	config.LegacyAPIGroupPrefixes = sets.NewString("/apiPrefix")
-	config.APIGroupPrefix = "/apiGroupPrefix"
 
 	s, err := config.SkipComplete().New()
 	if err != nil {
@@ -144,9 +142,9 @@ func TestInstallAPIGroups(t *testing.T) {
 		// "/api/v1"
 		config.LegacyAPIGroupPrefixes.List()[0] + "/" + apiGroupMeta.GroupVersion.Version,
 		// "/apis/extensions"
-		config.APIGroupPrefix + "/" + extensionsGroupMeta.GroupVersion.Group,
+		APIGroupPrefix + "/" + extensionsGroupMeta.GroupVersion.Group,
 		// "/apis/extensions/v1beta1"
-		config.APIGroupPrefix + "/" + extensionsGroupMeta.GroupVersion.String(),
+		APIGroupPrefix + "/" + extensionsGroupMeta.GroupVersion.String(),
 	}
 	for _, path := range validPaths {
 		_, err := http.Get(server.URL + path)
@@ -223,14 +221,15 @@ func TestNotRestRoutesHaveAuth(t *testing.T) {
 	authz := mockAuthorizer{}
 
 	config.LegacyAPIGroupPrefixes = sets.NewString("/apiPrefix")
-	config.APIGroupPrefix = "/apiGroupPrefix"
 	config.Authorizer = &authz
 
 	config.EnableSwaggerUI = true
 	config.EnableIndex = true
 	config.EnableProfiling = true
 	config.EnableSwaggerSupport = true
-	config.EnableVersion = true
+
+	kubeVersion := version.Get()
+	config.Version = &kubeVersion
 
 	s, err := config.SkipComplete().New()
 	if err != nil {
