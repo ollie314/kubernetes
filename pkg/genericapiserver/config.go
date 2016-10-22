@@ -17,7 +17,6 @@ limitations under the License.
 package genericapiserver
 
 import (
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -25,6 +24,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -36,8 +36,8 @@ import (
 	"k8s.io/kubernetes/pkg/admission"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/unversioned"
-	"k8s.io/kubernetes/pkg/apiserver"
 	apiserverfilters "k8s.io/kubernetes/pkg/apiserver/filters"
+	apiserveropenapi "k8s.io/kubernetes/pkg/apiserver/openapi"
 	"k8s.io/kubernetes/pkg/apiserver/request"
 	"k8s.io/kubernetes/pkg/auth/authenticator"
 	"k8s.io/kubernetes/pkg/auth/authorizer"
@@ -139,10 +139,6 @@ type Config struct {
 	// The range of ports to be assigned to services with type=NodePort or greater
 	ServiceNodePortRange utilnet.PortRange
 
-	// Used to customize default proxy dial/tls options
-	ProxyDialer          apiserver.ProxyDialerFunc
-	ProxyTLSClientConfig *tls.Config
-
 	// Additional ports to be exposed on the GenericAPIServer service
 	// extraServicePorts is injectable in the event that more ports
 	// (other than the default 443/tcp) are exposed on the GenericAPIServer
@@ -227,6 +223,7 @@ func NewConfig() *Config {
 					Description: "Default Response.",
 				},
 			},
+			GetOperationID: apiserveropenapi.GetOperationID,
 		},
 		LongRunningFunc: genericfilters.BasicLongRunningRequestCheck(longRunningRE, map[string]string{"watch": "true"}),
 	}
@@ -337,6 +334,28 @@ func (c *Config) Complete() completedConfig {
 		}
 		c.ExternalHost = hostAndPort
 	}
+	// All APIs will have the same authentication for now.
+	if c.OpenAPIConfig != nil && c.OpenAPIConfig.SecurityDefinitions != nil {
+		c.OpenAPIConfig.DefaultSecurity = []map[string][]string{}
+		keys := []string{}
+		for k := range *c.OpenAPIConfig.SecurityDefinitions {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			c.OpenAPIConfig.DefaultSecurity = append(c.OpenAPIConfig.DefaultSecurity, map[string][]string{k: {}})
+		}
+		if c.OpenAPIConfig.CommonResponses == nil {
+			c.OpenAPIConfig.CommonResponses = map[int]spec.Response{}
+		}
+		if _, exists := c.OpenAPIConfig.CommonResponses[http.StatusUnauthorized]; !exists {
+			c.OpenAPIConfig.CommonResponses[http.StatusUnauthorized] = spec.Response{
+				ResponseProps: spec.ResponseProps{
+					Description: "Unauthorized",
+				},
+			}
+		}
+	}
 	return completedConfig{c}
 }
 
@@ -398,13 +417,6 @@ func (c completedConfig) New() (*GenericAPIServer, error) {
 	}
 
 	s.HandlerContainer = mux.NewAPIContainer(http.NewServeMux(), c.Serializer)
-
-	if c.ProxyDialer != nil || c.ProxyTLSClientConfig != nil {
-		s.ProxyTransport = utilnet.SetTransportDefaults(&http.Transport{
-			Dial:            c.ProxyDialer,
-			TLSClientConfig: c.ProxyTLSClientConfig,
-		})
-	}
 
 	s.installAPI(c.Config)
 
