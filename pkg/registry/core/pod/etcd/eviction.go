@@ -21,7 +21,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apis/policy"
-	policyclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/policy/unversioned"
+	policyclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/policy/internalversion"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic/registry"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -108,7 +108,7 @@ func (r *EvictionREST) checkAndDecrement(namespace string, pdb policy.PodDisrupt
 	}
 
 	pdb.Status.PodDisruptionAllowed = false
-	if _, err := r.podDisruptionBudgetClient.PodDisruptionBudgets(namespace).Update(&pdb); err != nil {
+	if _, err := r.podDisruptionBudgetClient.PodDisruptionBudgets(namespace).UpdateStatus(&pdb); err != nil {
 		return false, err
 	}
 

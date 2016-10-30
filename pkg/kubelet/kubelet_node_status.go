@@ -333,15 +333,15 @@ func (kl *Kubelet) tryUpdateNodeStatus() error {
 	}
 	node := &nodes.Items[0]
 
-	if kl.reconcileCIDR {
-		kl.updatePodCIDR(node.Spec.PodCIDR)
-	}
+	kl.updatePodCIDR(node.Spec.PodCIDR)
 
 	if err := kl.setNodeStatus(node); err != nil {
 		return err
 	}
 	// Update the current status on the API server
 	updatedNode, err := kl.kubeClient.Core().Nodes().UpdateStatus(node)
+	// If update finishes sucessfully, mark the volumeInUse as reportedInUse to indicate
+	// those volumes are already updated in the node's status
 	if err == nil {
 		kl.volumeManager.MarkVolumesAsReportedInUse(
 			updatedNode.Status.VolumesInUse)
@@ -436,23 +436,32 @@ func (kl *Kubelet) setNodeAddress(node *api.Node) error {
 }
 
 func (kl *Kubelet) setNodeStatusMachineInfo(node *api.Node) {
+	// Note: avoid blindly overwriting the capacity in case opaque
+	//       resources are being advertised.
+	if node.Status.Capacity == nil {
+		node.Status.Capacity = api.ResourceList{}
+	}
+
 	// TODO: Post NotReady if we cannot get MachineInfo from cAdvisor. This needs to start
 	// cAdvisor locally, e.g. for test-cmd.sh, and in integration test.
 	info, err := kl.GetCachedMachineInfo()
 	if err != nil {
 		// TODO(roberthbailey): This is required for test-cmd.sh to pass.
 		// See if the test should be updated instead.
-		node.Status.Capacity = api.ResourceList{
-			api.ResourceCPU:       *resource.NewMilliQuantity(0, resource.DecimalSI),
-			api.ResourceMemory:    resource.MustParse("0Gi"),
-			api.ResourcePods:      *resource.NewQuantity(int64(kl.maxPods), resource.DecimalSI),
-			api.ResourceNvidiaGPU: *resource.NewQuantity(int64(kl.nvidiaGPUs), resource.DecimalSI),
-		}
+		node.Status.Capacity[api.ResourceCPU] = *resource.NewMilliQuantity(0, resource.DecimalSI)
+		node.Status.Capacity[api.ResourceMemory] = resource.MustParse("0Gi")
+		node.Status.Capacity[api.ResourcePods] = *resource.NewQuantity(int64(kl.maxPods), resource.DecimalSI)
+		node.Status.Capacity[api.ResourceNvidiaGPU] = *resource.NewQuantity(int64(kl.nvidiaGPUs), resource.DecimalSI)
+
 		glog.Errorf("Error getting machine info: %v", err)
 	} else {
 		node.Status.NodeInfo.MachineID = info.MachineID
 		node.Status.NodeInfo.SystemUUID = info.SystemUUID
-		node.Status.Capacity = cadvisor.CapacityFromMachineInfo(info)
+
+		for rName, rCap := range cadvisor.CapacityFromMachineInfo(info) {
+			node.Status.Capacity[rName] = rCap
+		}
+
 		if kl.podsPerCore > 0 {
 			node.Status.Capacity[api.ResourcePods] = *resource.NewQuantity(
 				int64(math.Min(float64(info.NumCores*kl.podsPerCore), float64(kl.maxPods))), resource.DecimalSI)
@@ -882,9 +891,13 @@ func (kl *Kubelet) recordNodeSchedulableEvent(node *api.Node) {
 	}
 }
 
-// Update VolumesInUse field in Node Status
+// Update VolumesInUse field in Node Status only after states are synced up at least once
+// in volume reconciler.
 func (kl *Kubelet) setNodeVolumesInUseStatus(node *api.Node) {
-	node.Status.VolumesInUse = kl.volumeManager.GetVolumesInUse()
+	// Make sure to only update node status after reconciler starts syncing up states
+	if kl.volumeManager.ReconcilerStatesHasBeenSynced() {
+		node.Status.VolumesInUse = kl.volumeManager.GetVolumesInUse()
+	}
 }
 
 // setNodeStatus fills in the Status fields of the given Node, overwriting

@@ -1423,6 +1423,9 @@ const (
 	PodReady PodConditionType = "Ready"
 	// PodInitialized means that all init containers in the pod have started successfully.
 	PodInitialized PodConditionType = "Initialized"
+	// PodReasonUnschedulable reason in PodScheduled PodCondition means that the scheduler
+	// can't schedule the pod right now, for example due to insufficient resources in the cluster.
+	PodReasonUnschedulable = "Unschedulable"
 )
 
 type PodCondition struct {
@@ -1602,7 +1605,7 @@ type PodAntiAffinity struct {
 type WeightedPodAffinityTerm struct {
 	// weight associated with matching the corresponding podAffinityTerm,
 	// in the range 1-100.
-	Weight int `json:"weight"`
+	Weight int32 `json:"weight"`
 	// Required. A pod affinity term, associated with the corresponding weight.
 	PodAffinityTerm PodAffinityTerm `json:"podAffinityTerm"`
 }
@@ -2626,6 +2629,11 @@ const (
 	// NVIDIA GPU, in devices. Alpha, might change: although fractional and allowing values >1, only one whole device per node is assigned.
 	ResourceNvidiaGPU ResourceName = "alpha.kubernetes.io/nvidia-gpu"
 	// Number of Pods that may be running on this Node: see ResourcePods
+)
+
+const (
+	// Namespace prefix for opaque counted resources (alpha).
+	ResourceOpaqueIntPrefix = "pod.alpha.kubernetes.io/opaque-int-resource-"
 )
 
 // ResourceList is a set of (resource name, quantity) pairs.

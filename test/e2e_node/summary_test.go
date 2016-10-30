@@ -35,6 +35,11 @@ import (
 var _ = framework.KubeDescribe("Summary API", func() {
 	f := framework.NewDefaultFramework("summary-test")
 	Context("when querying /stats/summary", func() {
+		AfterEach(func() {
+			if CurrentGinkgoTestDescription().Failed && framework.TestContext.DumpLogsOnFailure {
+				framework.LogFailedContainers(f.ClientSet, f.Namespace.Name, framework.Logf)
+			}
+		})
 		It("should report resource usage through the stats api", func() {
 			const pod0 = "stats-busybox-0"
 			const pod1 = "stats-busybox-1"
@@ -68,7 +73,7 @@ var _ = framework.KubeDescribe("Summary API", func() {
 					"Time": recent(maxStatsAge),
 					// We don't limit system container memory.
 					"AvailableBytes":  BeNil(),
-					"UsageBytes":      bounded(1*mb, 1*gb),
+					"UsageBytes":      bounded(1*mb, 10*gb),
 					"WorkingSetBytes": bounded(1*mb, 1*gb),
 					"RSSBytes":        bounded(1*mb, 1*gb),
 					"PageFaults":      bounded(1000, 1E9),
@@ -214,7 +219,7 @@ func createSummaryTestPods(f *framework.Framework, names ...string) {
 					{
 						Name:    "busybox-container",
 						Image:   "gcr.io/google_containers/busybox:1.24",
-						Command: []string{"sh", "-c", "ping -c 1 google.com; while true; do echo 'hello world' | tee /test-empty-dir-mnt/file ; sleep 1; done"},
+						Command: []string{"sh", "-c", "ping -c 1 google.com; while true; do echo 'hello world' >> /test-empty-dir-mnt/file ; sleep 1; done"},
 						Resources: api.ResourceRequirements{
 							Limits: api.ResourceList{
 								// Must set memory limit to get MemoryStats.AvailableBytes

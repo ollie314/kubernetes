@@ -22,9 +22,10 @@ cmd/kubeadm/app/apis/kubeadm/install
 cmd/kubectl
 cmd/kubelet
 cmd/kubernetes-discovery
+cmd/libs/go2idl/client-gen
 cmd/libs/go2idl/client-gen/generators
-cmd/libs/go2idl/client-gen/test_apis/testgroup.k8s.io/install
-cmd/libs/go2idl/client-gen/testoutput/clientset_generated/test_internalclientset/typed/testgroup.k8s.io/unversioned
+cmd/libs/go2idl/client-gen/test_apis/testgroup/install
+cmd/libs/go2idl/client-gen/testoutput/clientset_generated/test_internalclientset/typed/testgroup.k8s.io/internalversion
 cmd/libs/go2idl/conversion-gen
 cmd/libs/go2idl/deepcopy-gen
 cmd/libs/go2idl/defaulter-gen
@@ -50,6 +51,7 @@ federation/apis/federation/install
 federation/cmd/federation-apiserver
 federation/cmd/federation-controller-manager
 federation/cmd/genfeddocs
+hack/boilerplate/test
 hack/cmd/teststale
 pkg/api
 pkg/api/annotations
@@ -86,6 +88,7 @@ pkg/auth/authorizer/union
 pkg/client/metrics
 pkg/client/metrics/prometheus
 pkg/client/testing/core
+pkg/client/typed/discovery
 pkg/client/unversioned
 pkg/client/unversioned/adapters/internalclientset
 pkg/client/unversioned/auth
@@ -234,6 +237,8 @@ test/images/goproxy
 test/images/logs-generator
 test/images/mount-tester
 test/images/n-way-http
+test/images/net
+test/images/net/common
 test/images/port-forward-tester
 test/images/porter
 test/images/resource-consumer/consume-cpu

@@ -183,7 +183,7 @@ __custom_func() {
     * limitranges (aka 'limits')
     * nodes (aka 'no')
     * namespaces (aka 'ns')
-    * petsets (alpha feature, may be unstable)
+    * statefulsets (alpha feature, may be unstable)
     * pods (aka 'po')
     * persistentvolumes (aka 'pv')
     * persistentvolumeclaims (aka 'pvc')
@@ -221,7 +221,7 @@ func NewKubectlCommand(f cmdutil.Factory, in io.Reader, out, err io.Writer) *cob
 		{
 			Message: "Basic Commands (Beginner):",
 			Commands: []*cobra.Command{
-				NewCmdCreate(f, out),
+				NewCmdCreate(f, out, err),
 				NewCmdExposeService(f, out),
 				NewCmdRun(f, in, out, err),
 				set.NewCmdSet(f, out, err),

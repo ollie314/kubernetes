@@ -30,7 +30,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/cache"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -55,9 +54,7 @@ var MaxContainerFailures = 0
 
 type DensityTestConfig struct {
 	Configs      []testutils.RCConfig
-	Client       *client.Client
 	ClientSet    internalclientset.Interface
-	Namespace    string
 	PollInterval time.Duration
 	PodCount     int
 	Timeout      time.Duration
@@ -162,9 +159,9 @@ func density30AddonResourceVerifier(numNodes int) map[string]framework.ResourceC
 	return constraints
 }
 
-func logPodStartupStatus(c *client.Client, expectedPods int, ns string, observedLabels map[string]string, period time.Duration, stopCh chan struct{}) {
+func logPodStartupStatus(c internalclientset.Interface, expectedPods int, observedLabels map[string]string, period time.Duration, stopCh chan struct{}) {
 	label := labels.SelectorFromSet(labels.Set(observedLabels))
-	podStore := testutils.NewPodStore(c, ns, label, fields.Everything())
+	podStore := testutils.NewPodStore(c, api.NamespaceAll, label, fields.Everything())
 	defer podStore.Stop()
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
@@ -187,59 +184,6 @@ func logPodStartupStatus(c *client.Client, expectedPods int, ns string, observed
 // all pods to start
 func runDensityTest(dtc DensityTestConfig) time.Duration {
 	defer GinkgoRecover()
-	// Create a listener for events.
-	// eLock is a lock protects the events
-	var eLock sync.Mutex
-	events := make([](*api.Event), 0)
-	_, controller := cache.NewInformer(
-		&cache.ListWatch{
-			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
-				return dtc.Client.Events(dtc.Namespace).List(options)
-			},
-			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
-				return dtc.Client.Events(dtc.Namespace).Watch(options)
-			},
-		},
-		&api.Event{},
-		0,
-		cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				eLock.Lock()
-				defer eLock.Unlock()
-				events = append(events, obj.(*api.Event))
-			},
-		},
-	)
-	stop := make(chan struct{})
-	go controller.Run(stop)
-
-	// Create a listener for api updates
-	// uLock is a lock protects the updateCount
-	var uLock sync.Mutex
-	updateCount := 0
-	label := labels.SelectorFromSet(labels.Set(map[string]string{"type": "densityPod"}))
-	_, updateController := cache.NewInformer(
-		&cache.ListWatch{
-			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
-				options.LabelSelector = label
-				return dtc.Client.Pods(dtc.Namespace).List(options)
-			},
-			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
-				options.LabelSelector = label
-				return dtc.Client.Pods(dtc.Namespace).Watch(options)
-			},
-		},
-		&api.Pod{},
-		0,
-		cache.ResourceEventHandlerFuncs{
-			UpdateFunc: func(_, _ interface{}) {
-				uLock.Lock()
-				defer uLock.Unlock()
-				updateCount++
-			},
-		},
-	)
-	go updateController.Run(stop)
 
 	// Start all replication controllers.
 	startTime := time.Now()
@@ -254,49 +198,16 @@ func runDensityTest(dtc DensityTestConfig) time.Duration {
 		}()
 	}
 	logStopCh := make(chan struct{})
-	go logPodStartupStatus(dtc.Client, dtc.PodCount, dtc.Namespace, map[string]string{"type": "densityPod"}, dtc.PollInterval, logStopCh)
+	go logPodStartupStatus(dtc.ClientSet, dtc.PodCount, map[string]string{"type": "densityPod"}, dtc.PollInterval, logStopCh)
 	wg.Wait()
 	startupTime := time.Now().Sub(startTime)
 	close(logStopCh)
 	framework.Logf("E2E startup time for %d pods: %v", dtc.PodCount, startupTime)
 	framework.Logf("Throughput (pods/s) during cluster saturation phase: %v", float32(dtc.PodCount)/float32(startupTime/time.Second))
 
-	By("Waiting for all events to be recorded")
-	last := -1
-	current := len(events)
-	lastCount := -1
-	currentCount := updateCount
-	for start := time.Now(); (last < current || lastCount < currentCount) && time.Since(start) < dtc.Timeout; time.Sleep(10 * time.Second) {
-		func() {
-			eLock.Lock()
-			defer eLock.Unlock()
-			last = current
-			current = len(events)
-		}()
-		func() {
-			uLock.Lock()
-			defer uLock.Unlock()
-			lastCount = currentCount
-			currentCount = updateCount
-		}()
-	}
-	close(stop)
-
-	if current != last {
-		framework.Logf("Warning: Not all events were recorded after waiting %.2f minutes", dtc.Timeout.Minutes())
-	}
-	framework.Logf("Found %d events", current)
-	if currentCount != lastCount {
-		framework.Logf("Warning: Not all updates were recorded after waiting %.2f minutes", dtc.Timeout.Minutes())
-	}
-	framework.Logf("Found %d updates", currentCount)
-
-	// Tune the threshold for allowed failures.
-	badEvents := framework.BadEvents(events)
-	Expect(badEvents).NotTo(BeNumerically(">", int(math.Floor(0.01*float64(dtc.PodCount)))))
 	// Print some data about Pod to Node allocation
 	By("Printing Pod to Node allocation data")
-	podList, err := dtc.Client.Pods(api.NamespaceAll).List(api.ListOptions{})
+	podList, err := dtc.ClientSet.Core().Pods(api.NamespaceAll).List(api.ListOptions{})
 	framework.ExpectNoError(err)
 	pausePodAllocation := make(map[string]int)
 	systemPodAllocation := make(map[string][]string)
@@ -324,15 +235,15 @@ func cleanupDensityTest(dtc DensityTestConfig) {
 	// We explicitly delete all pods to have API calls necessary for deletion accounted in metrics.
 	for i := range dtc.Configs {
 		rcName := dtc.Configs[i].Name
-		rc, err := dtc.Client.ReplicationControllers(dtc.Namespace).Get(rcName)
+		rc, err := dtc.ClientSet.Core().ReplicationControllers(dtc.Configs[i].Namespace).Get(rcName)
 		if err == nil && rc.Spec.Replicas != 0 {
 			if framework.TestContext.GarbageCollectorEnabled {
 				By("Cleaning up only the replication controller, garbage collector will clean up the pods")
-				err := framework.DeleteRCAndWaitForGC(dtc.Client, dtc.Namespace, rcName)
+				err := framework.DeleteRCAndWaitForGC(dtc.ClientSet, dtc.Configs[i].Namespace, rcName)
 				framework.ExpectNoError(err)
 			} else {
 				By("Cleaning up the replication controller and pods")
-				err := framework.DeleteRCAndPods(dtc.Client, dtc.ClientSet, dtc.Namespace, rcName)
+				err := framework.DeleteRCAndPods(dtc.ClientSet, dtc.Configs[i].Namespace, rcName)
 				framework.ExpectNoError(err)
 			}
 		}
@@ -347,7 +258,7 @@ func cleanupDensityTest(dtc DensityTestConfig) {
 // results will not be representative for control-plane performance as we'll start hitting
 // limits on Docker's concurrent container startup.
 var _ = framework.KubeDescribe("Density", func() {
-	var c *client.Client
+	var c internalclientset.Interface
 	var nodeCount int
 	var RCName string
 	var additionalPodsPrefix string
@@ -383,7 +294,9 @@ var _ = framework.KubeDescribe("Density", func() {
 		// Verify scheduler metrics.
 		// TODO: Reset metrics at the beginning of the test.
 		// We should do something similar to how we do it for APIserver.
-		framework.ExpectNoError(framework.VerifySchedulerLatency(c))
+		if err = framework.VerifySchedulerLatency(c); err != nil {
+			framework.Logf("Warning: Scheduler latency not calculated, %v", err)
+		}
 	})
 
 	// Explicitly put here, to delete namespace at the end of the test
@@ -392,7 +305,7 @@ var _ = framework.KubeDescribe("Density", func() {
 	f.NamespaceDeletionTimeout = time.Hour
 
 	BeforeEach(func() {
-		c = f.Client
+		c = f.ClientSet
 		ns = f.Namespace.Name
 
 		// In large clusters we may get to this point but still have a bunch
@@ -461,6 +374,13 @@ var _ = framework.KubeDescribe("Density", func() {
 		name := fmt.Sprintf("[Feature:%s] should allow starting %d pods per node", feature, testArg.podsPerNode)
 		itArg := testArg
 		It(name, func() {
+			nodePreparer := framework.NewE2ETestNodePreparer(
+				f.ClientSet,
+				[]testutils.CountToStrategy{{Count: nodeCount, Strategy: &testutils.TrivialNodePrepareStrategy{}}},
+			)
+			framework.ExpectNoError(nodePreparer.PrepareNodes())
+			defer nodePreparer.CleanupNodes()
+
 			podsPerNode := itArg.podsPerNode
 			if podsPerNode == 30 {
 				f.AddonResourceConstraints = func() map[string]framework.ResourceConstraint { return density30AddonResourceVerifier(nodeCount) }()
@@ -471,19 +391,23 @@ var _ = framework.KubeDescribe("Density", func() {
 			defer fileHndl.Close()
 			timeout := 10 * time.Minute
 
-			// TODO: loop to podsPerNode instead of 1 when we're ready.
-			numberOrRCs := 1
-			RCConfigs := make([]testutils.RCConfig, numberOrRCs)
-			for i := 0; i < numberOrRCs; i++ {
-				RCName := "density" + strconv.Itoa(totalPods) + "-" + strconv.Itoa(i) + "-" + uuid
+			// nodeCountPerNamespace and CreateNamespaces are defined in load.go
+			numberOfRCs := (nodeCount + nodeCountPerNamespace - 1) / nodeCountPerNamespace
+			namespaces, err := CreateNamespaces(f, numberOfRCs, fmt.Sprintf("density-%v", testArg.podsPerNode))
+			framework.ExpectNoError(err)
+
+			RCConfigs := make([]testutils.RCConfig, numberOfRCs)
+			for i := 0; i < numberOfRCs; i++ {
+				RCName := fmt.Sprintf("density%v-%v-%v", totalPods, i, uuid)
+				nsName := namespaces[i].Name
 				RCConfigs[i] = testutils.RCConfig{Client: c,
-					Image:                framework.GetPauseImageName(f.Client),
+					Image:                framework.GetPauseImageName(f.ClientSet),
 					Name:                 RCName,
-					Namespace:            ns,
+					Namespace:            nsName,
 					Labels:               map[string]string{"type": "densityPod"},
 					PollInterval:         itArg.interval,
 					PodStatusFile:        fileHndl,
-					Replicas:             (totalPods + numberOrRCs - 1) / numberOrRCs,
+					Replicas:             (totalPods + numberOfRCs - 1) / numberOfRCs,
 					CpuRequest:           nodeCpuCapacity / 100,
 					MemRequest:           nodeMemCapacity / 100,
 					MaxContainerFailures: &MaxContainerFailures,
@@ -492,11 +416,9 @@ var _ = framework.KubeDescribe("Density", func() {
 			}
 
 			dConfig := DensityTestConfig{
-				Client:       c,
 				ClientSet:    f.ClientSet,
 				Configs:      RCConfigs,
 				PodCount:     totalPods,
-				Namespace:    ns,
 				PollInterval: itArg.interval,
 				Timeout:      timeout,
 			}
@@ -505,7 +427,7 @@ var _ = framework.KubeDescribe("Density", func() {
 				By("Scheduling additional Pods to measure startup latencies")
 
 				createTimes := make(map[string]unversioned.Time, 0)
-				nodes := make(map[string]string, 0)
+				nodeNames := make(map[string]string, 0)
 				scheduleTimes := make(map[string]unversioned.Time, 0)
 				runTimes := make(map[string]unversioned.Time, 0)
 				watchTimes := make(map[string]unversioned.Time, 0)
@@ -520,7 +442,7 @@ var _ = framework.KubeDescribe("Density", func() {
 						if _, found := watchTimes[p.Name]; !found {
 							watchTimes[p.Name] = unversioned.Now()
 							createTimes[p.Name] = p.CreationTimestamp
-							nodes[p.Name] = p.Spec.NodeName
+							nodeNames[p.Name] = p.Spec.NodeName
 							var startTime unversioned.Time
 							for _, cs := range p.Status.ContainerStatuses {
 								if cs.State.Running != nil {
@@ -539,35 +461,48 @@ var _ = framework.KubeDescribe("Density", func() {
 				}
 
 				additionalPodsPrefix = "density-latency-pod"
-				latencyPodsStore, controller := cache.NewInformer(
-					&cache.ListWatch{
-						ListFunc: func(options api.ListOptions) (runtime.Object, error) {
-							options.LabelSelector = labels.SelectorFromSet(labels.Set{"type": additionalPodsPrefix})
-							return c.Pods(ns).List(options)
-						},
-						WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
-							options.LabelSelector = labels.SelectorFromSet(labels.Set{"type": additionalPodsPrefix})
-							return c.Pods(ns).Watch(options)
-						},
-					},
-					&api.Pod{},
-					0,
-					cache.ResourceEventHandlerFuncs{
-						AddFunc: func(obj interface{}) {
-							p, ok := obj.(*api.Pod)
-							Expect(ok).To(Equal(true))
-							go checkPod(p)
-						},
-						UpdateFunc: func(oldObj, newObj interface{}) {
-							p, ok := newObj.(*api.Pod)
-							Expect(ok).To(Equal(true))
-							go checkPod(p)
-						},
-					},
-				)
-
 				stopCh := make(chan struct{})
-				go controller.Run(stopCh)
+
+				latencyPodStores := make([]cache.Store, len(namespaces))
+				for i := 0; i < len(namespaces); i++ {
+					nsName := namespaces[i].Name
+					latencyPodsStore, controller := cache.NewInformer(
+						&cache.ListWatch{
+							ListFunc: func(options api.ListOptions) (runtime.Object, error) {
+								options.LabelSelector = labels.SelectorFromSet(labels.Set{"type": additionalPodsPrefix})
+								obj, err := c.Core().Pods(nsName).List(options)
+								return runtime.Object(obj), err
+							},
+							WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+								options.LabelSelector = labels.SelectorFromSet(labels.Set{"type": additionalPodsPrefix})
+								return c.Core().Pods(nsName).Watch(options)
+							},
+						},
+						&api.Pod{},
+						0,
+						cache.ResourceEventHandlerFuncs{
+							AddFunc: func(obj interface{}) {
+								p, ok := obj.(*api.Pod)
+								if !ok {
+									framework.Logf("Failed to cast observed object to *api.Pod.")
+								}
+								Expect(ok).To(Equal(true))
+								go checkPod(p)
+							},
+							UpdateFunc: func(oldObj, newObj interface{}) {
+								p, ok := newObj.(*api.Pod)
+								if !ok {
+									framework.Logf("Failed to cast observed object to *api.Pod.")
+								}
+								Expect(ok).To(Equal(true))
+								go checkPod(p)
+							},
+						},
+					)
+					latencyPodStores[i] = latencyPodsStore
+
+					go controller.Run(stopCh)
+				}
 
 				// Create some additional pods with throughput ~5 pods/sec.
 				var wg sync.WaitGroup
@@ -584,9 +519,12 @@ var _ = framework.KubeDescribe("Density", func() {
 					cpuRequest = *resource.NewMilliQuantity(0, resource.DecimalSI)
 					memRequest = *resource.NewQuantity(0, resource.DecimalSI)
 				}
+				rcNameToNsMap := map[string]string{}
 				for i := 1; i <= nodeCount; i++ {
 					name := additionalPodsPrefix + "-" + strconv.Itoa(i)
-					go createRunningPodFromRC(&wg, c, name, ns, framework.GetPauseImageName(f.Client), additionalPodsPrefix, cpuRequest, memRequest)
+					nsName := namespaces[i%len(namespaces)].Name
+					rcNameToNsMap[name] = nsName
+					go createRunningPodFromRC(&wg, c, name, nsName, framework.GetPauseImageName(f.ClientSet), additionalPodsPrefix, cpuRequest, memRequest)
 					time.Sleep(200 * time.Millisecond)
 				}
 				wg.Wait()
@@ -600,29 +538,34 @@ var _ = framework.KubeDescribe("Density", func() {
 				close(stopCh)
 
 				nodeToLatencyPods := make(map[string]int)
-				for _, item := range latencyPodsStore.List() {
-					pod := item.(*api.Pod)
-					nodeToLatencyPods[pod.Spec.NodeName]++
-				}
-				for node, count := range nodeToLatencyPods {
-					if count > 1 {
-						framework.Logf("%d latency pods scheduled on %s", count, node)
+				for i := range latencyPodStores {
+					for _, item := range latencyPodStores[i].List() {
+						pod := item.(*api.Pod)
+						nodeToLatencyPods[pod.Spec.NodeName]++
+					}
+					for node, count := range nodeToLatencyPods {
+						if count > 1 {
+							framework.Logf("%d latency pods scheduled on %s", count, node)
+						}
 					}
 				}
 
-				selector := fields.Set{
-					"involvedObject.kind":      "Pod",
-					"involvedObject.namespace": ns,
-					"source":                   api.DefaultSchedulerName,
-				}.AsSelector()
-				options := api.ListOptions{FieldSelector: selector}
-				schedEvents, err := c.Events(ns).List(options)
-				framework.ExpectNoError(err)
-				for k := range createTimes {
-					for _, event := range schedEvents.Items {
-						if event.InvolvedObject.Name == k {
-							scheduleTimes[k] = event.FirstTimestamp
-							break
+				for i := 0; i < len(namespaces); i++ {
+					nsName := namespaces[i].Name
+					selector := fields.Set{
+						"involvedObject.kind":      "Pod",
+						"involvedObject.namespace": nsName,
+						"source":                   api.DefaultSchedulerName,
+					}.AsSelector()
+					options := api.ListOptions{FieldSelector: selector}
+					schedEvents, err := c.Core().Events(nsName).List(options)
+					framework.ExpectNoError(err)
+					for k := range createTimes {
+						for _, event := range schedEvents.Items {
+							if event.InvolvedObject.Name == k {
+								scheduleTimes[k] = event.FirstTimestamp
+								break
+							}
 						}
 					}
 				}
@@ -635,12 +578,24 @@ var _ = framework.KubeDescribe("Density", func() {
 
 				for name, create := range createTimes {
 					sched, ok := scheduleTimes[name]
+					if !ok {
+						framework.Logf("Failed to find schedule time for %v", name)
+					}
 					Expect(ok).To(Equal(true))
 					run, ok := runTimes[name]
+					if !ok {
+						framework.Logf("Failed to find run time for %v", name)
+					}
 					Expect(ok).To(Equal(true))
 					watch, ok := watchTimes[name]
+					if !ok {
+						framework.Logf("Failed to find watch time for %v", name)
+					}
 					Expect(ok).To(Equal(true))
-					node, ok := nodes[name]
+					node, ok := nodeNames[name]
+					if !ok {
+						framework.Logf("Failed to find node for %v", name)
+					}
 					Expect(ok).To(Equal(true))
 
 					scheduleLag = append(scheduleLag, framework.PodLatencyData{Name: name, Node: node, Latency: sched.Time.Sub(create.Time)})
@@ -671,7 +626,7 @@ var _ = framework.KubeDescribe("Density", func() {
 				By("Removing additional replication controllers")
 				deleteRC := func(i int) {
 					name := additionalPodsPrefix + "-" + strconv.Itoa(i+1)
-					framework.ExpectNoError(framework.DeleteRCAndWaitForGC(c, ns, name))
+					framework.ExpectNoError(framework.DeleteRCAndWaitForGC(c, rcNameToNsMap[name], name))
 				}
 				workqueue.Parallelize(16, nodeCount, deleteRC)
 			}
@@ -700,7 +655,7 @@ var _ = framework.KubeDescribe("Density", func() {
 			}
 			RCName = "density" + strconv.Itoa(totalPods) + "-" + strconv.Itoa(i) + "-" + uuid
 			RCConfigs[i] = testutils.RCConfig{Client: c,
-				Image:                framework.GetPauseImageName(f.Client),
+				Image:                framework.GetPauseImageName(f.ClientSet),
 				Name:                 RCName,
 				Namespace:            ns,
 				Labels:               map[string]string{"type": "densityPod"},
@@ -712,11 +667,9 @@ var _ = framework.KubeDescribe("Density", func() {
 			}
 		}
 		dConfig := DensityTestConfig{
-			Client:       c,
 			ClientSet:    f.ClientSet,
 			Configs:      RCConfigs,
 			PodCount:     totalPods,
-			Namespace:    ns,
 			PollInterval: 10 * time.Second,
 			Timeout:      10 * time.Minute,
 		}
@@ -725,7 +678,7 @@ var _ = framework.KubeDescribe("Density", func() {
 	})
 })
 
-func createRunningPodFromRC(wg *sync.WaitGroup, c *client.Client, name, ns, image, podType string, cpuRequest, memRequest resource.Quantity) {
+func createRunningPodFromRC(wg *sync.WaitGroup, c internalclientset.Interface, name, ns, image, podType string, cpuRequest, memRequest resource.Quantity) {
 	defer GinkgoRecover()
 	defer wg.Done()
 	labels := map[string]string{
@@ -762,7 +715,7 @@ func createRunningPodFromRC(wg *sync.WaitGroup, c *client.Client, name, ns, imag
 			},
 		},
 	}
-	_, err := c.ReplicationControllers(ns).Create(rc)
+	_, err := c.Core().ReplicationControllers(ns).Create(rc)
 	framework.ExpectNoError(err)
 	framework.ExpectNoError(framework.WaitForRCPodsRunning(c, ns, name))
 	framework.Logf("Found pod '%s' running", name)

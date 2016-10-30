@@ -37,7 +37,7 @@ import (
 	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/apis/batch"
 	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	unversionedcore "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/unversioned"
+	unversionedcore "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
 	"k8s.io/kubernetes/pkg/client/leaderelection"
 	"k8s.io/kubernetes/pkg/client/leaderelection/resourcelock"
 	"k8s.io/kubernetes/pkg/client/record"
@@ -271,11 +271,9 @@ func StartControllers(s *options.CMServer, kubeconfig *restclient.Config, rootCl
 	).Run(int(s.ConcurrentRCSyncs), wait.NeverStop)
 	time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 
-	if s.TerminatedPodGCThreshold > 0 {
-		go podgc.NewPodGC(client("pod-garbage-collector"), sharedInformers.Pods().Informer(),
-			int(s.TerminatedPodGCThreshold)).Run(wait.NeverStop)
-		time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
-	}
+	go podgc.NewPodGC(client("pod-garbage-collector"), sharedInformers.Pods().Informer(),
+		int(s.TerminatedPodGCThreshold)).Run(wait.NeverStop)
+	time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 
 	cloud, err := cloudprovider.InitCloudProvider(s.CloudProvider, s.CloudConfigFile)
 	if err != nil {
@@ -442,15 +440,15 @@ func StartControllers(s *options.CMServer, kubeconfig *restclient.Config, rootCl
 
 	groupVersion = "apps/v1alpha1"
 	resources, found = resourceMap[groupVersion]
-	glog.Infof("Attempting to start petset, full resource map %+v", resourceMap)
+	glog.Infof("Attempting to start statefulset, full resource map %+v", resourceMap)
 	if containsVersion(versions, groupVersion) && found {
 		glog.Infof("Starting %s apis", groupVersion)
-		if containsResource(resources, "petsets") {
-			glog.Infof("Starting PetSet controller")
+		if containsResource(resources, "statefulsets") {
+			glog.Infof("Starting StatefulSet controller")
 			resyncPeriod := ResyncPeriod(s)()
-			go petset.NewPetSetController(
+			go petset.NewStatefulSetController(
 				sharedInformers.Pods().Informer(),
-				client("petset-controller"),
+				client("statefulset-controller"),
 				resyncPeriod,
 			).Run(1, wait.NeverStop)
 			time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
@@ -531,10 +529,11 @@ func StartControllers(s *options.CMServer, kubeconfig *restclient.Config, rootCl
 		}
 	}
 
-	serviceaccountcontroller.NewServiceAccountsController(
+	go serviceaccountcontroller.NewServiceAccountsController(
+		sharedInformers.ServiceAccounts(), sharedInformers.Namespaces(),
 		client("service-account-controller"),
 		serviceaccountcontroller.DefaultServiceAccountsControllerOptions(),
-	).Run()
+	).Run(1, stop)
 	time.Sleep(wait.Jitter(s.ControllerStartInterval.Duration, ControllerStartJitter))
 
 	if s.EnableGarbageCollector {
@@ -547,7 +546,7 @@ func StartControllers(s *options.CMServer, kubeconfig *restclient.Config, rootCl
 		config := restclient.AddUserAgent(kubeconfig, "generic-garbage-collector")
 		config.ContentConfig.NegotiatedSerializer = serializer.DirectCodecFactory{CodecFactory: metaonly.NewMetadataCodecFactory()}
 		metaOnlyClientPool := dynamic.NewClientPool(config, restMapper, dynamic.LegacyAPIPathResolverFunc)
-		config.ContentConfig.NegotiatedSerializer = nil
+		config.ContentConfig = dynamic.ContentConfig()
 		clientPool := dynamic.NewClientPool(config, restMapper, dynamic.LegacyAPIPathResolverFunc)
 		garbageCollector, err := garbagecollector.NewGarbageCollector(metaOnlyClientPool, clientPool, restMapper, groupVersionResources)
 		if err != nil {

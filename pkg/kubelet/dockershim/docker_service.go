@@ -25,6 +25,7 @@ import (
 	runtimeApi "k8s.io/kubernetes/pkg/kubelet/api/v1alpha1/runtime"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/dockertools"
+	"k8s.io/kubernetes/pkg/kubelet/server/streaming"
 	"k8s.io/kubernetes/pkg/util/term"
 )
 
@@ -48,40 +49,62 @@ const (
 	containerTypeLabelKey       = "io.kubernetes.docker.type"
 	containerTypeLabelSandbox   = "podsandbox"
 	containerTypeLabelContainer = "container"
+	containerLogPathLabelKey    = "io.kubernetes.container.logpath"
 	sandboxIDLabelKey           = "io.kubernetes.sandbox.id"
 )
 
-var internalLabelKeys []string = []string{containerTypeLabelKey, sandboxIDLabelKey}
+var internalLabelKeys []string = []string{containerTypeLabelKey, containerLogPathLabelKey, sandboxIDLabelKey}
 
 // NOTE: Anything passed to DockerService should be eventually handled in another way when we switch to running the shim as a different process.
-func NewDockerService(client dockertools.DockerInterface, seccompProfileRoot string, podSandboxImage string) DockerLegacyService {
-	return &dockerService{
+func NewDockerService(client dockertools.DockerInterface, seccompProfileRoot string, podSandboxImage string, streamingConfig *streaming.Config) (DockerService, error) {
+	ds := &dockerService{
 		seccompProfileRoot: seccompProfileRoot,
 		client:             dockertools.NewInstrumentedDockerInterface(client),
+		os:                 kubecontainer.RealOS{},
 		podSandboxImage:    podSandboxImage,
+		streamingRuntime: &streamingRuntime{
+			client: client,
+			// Only the native exec handling is supported for now.
+			// TODO(#35747) - Either deprecate nsenter exec handling, or add support for it here.
+			execHandler: &dockertools.NativeExecHandler{},
+		},
 	}
+	if streamingConfig != nil {
+		var err error
+		ds.streamingServer, err = streaming.NewServer(*streamingConfig, ds.streamingRuntime)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return ds, nil
 }
 
-// DockerLegacyService is an interface that embeds both the new
-// RuntimeService and ImageService interfaces, while including legacy methods
-// for backward compatibility.
-type DockerLegacyService interface {
+// DockerService is an interface that embeds both the new RuntimeService and
+// ImageService interfaces, while including DockerLegacyService for backward
+// compatibility.
+type DockerService interface {
 	internalApi.RuntimeService
 	internalApi.ImageManagerService
+	DockerLegacyService
+}
 
+// DockerLegacyService is an interface that embeds all legacy methods for
+// backward compatibility.
+type DockerLegacyService interface {
 	// Supporting legacy methods for docker.
 	GetContainerLogs(pod *api.Pod, containerID kubecontainer.ContainerID, logOptions *api.PodLogOptions, stdout, stderr io.Writer) (err error)
-	kubecontainer.ContainerAttacher
-	PortForward(sandboxID string, port uint16, stream io.ReadWriteCloser) error
-
-	// TODO: Remove this once exec is properly defined in CRI.
-	ExecInContainer(containerID kubecontainer.ContainerID, cmd []string, stdin io.Reader, stdout, stderr io.WriteCloser, tty bool, resize <-chan term.Size) error
+	LegacyExec(containerID kubecontainer.ContainerID, cmd []string, stdin io.Reader, stdout, stderr io.WriteCloser, tty bool, resize <-chan term.Size) error
+	LegacyAttach(id kubecontainer.ContainerID, stdin io.Reader, stdout, stderr io.WriteCloser, tty bool, resize <-chan term.Size) error
+	LegacyPortForward(sandboxID string, port uint16, stream io.ReadWriteCloser) error
 }
 
 type dockerService struct {
 	seccompProfileRoot string
 	client             dockertools.DockerInterface
+	os                 kubecontainer.OSInterface
 	podSandboxImage    string
+	streamingRuntime   *streamingRuntime
+	streamingServer    streaming.Server
 }
 
 // Version returns the runtime name, runtime version and runtime API version

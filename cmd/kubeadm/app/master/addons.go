@@ -31,14 +31,13 @@ import (
 )
 
 func createKubeProxyPodSpec(cfg *kubeadmapi.MasterConfiguration) api.PodSpec {
-	envParams := kubeadmapi.GetEnvParams()
 	privilegedTrue := true
 	return api.PodSpec{
 		SecurityContext: &api.PodSecurityContext{HostNetwork: true},
 		Containers: []api.Container{{
 			Name:            kubeProxy,
-			Image:           images.GetCoreImage(images.KubeProxyImage, cfg, envParams["hyperkube_image"]),
-			Command:         append(getComponentCommand("proxy", cfg), "--kubeconfig=/run/kubeconfig"),
+			Image:           images.GetCoreImage(images.KubeProxyImage, cfg, kubeadmapi.GlobalEnvParams.HyperkubeImage),
+			Command:         append(getProxyCommand(cfg), "--kubeconfig=/run/kubeconfig"),
 			SecurityContext: &api.SecurityContext{Privileged: &privilegedTrue},
 			VolumeMounts: []api.VolumeMount{
 				{
@@ -67,7 +66,7 @@ func createKubeProxyPodSpec(cfg *kubeadmapi.MasterConfiguration) api.PodSpec {
 			{
 				Name: "kubeconfig",
 				VolumeSource: api.VolumeSource{
-					HostPath: &api.HostPathVolumeSource{Path: path.Join(envParams["kubernetes_dir"], "kubelet.conf")},
+					HostPath: &api.HostPathVolumeSource{Path: path.Join(kubeadmapi.GlobalEnvParams.KubernetesDir, "kubelet.conf")},
 				},
 			},
 			{
