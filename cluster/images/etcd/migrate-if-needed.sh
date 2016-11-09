@@ -18,7 +18,7 @@
 # This script performs etcd upgrade based on the following environmental
 # variables:
 # TARGET_STORAGE - API of etcd to be used (supported: 'etcd2', 'etcd3')
-# TARGET_VERSION - etcd release to be used (supported: '2.2.1', '2.3.7', '3.0.13')
+# TARGET_VERSION - etcd release to be used (supported: '2.2.1', '2.3.7', '3.0.14')
 # DATA_DIRECTORY - directory with etcd data
 #
 # The current etcd version and storage format is detected based on the
@@ -27,8 +27,8 @@
 #
 # The update workflow support the following upgrade steps:
 # - 2.2.1/etcd2 -> 2.3.7/etcd2
-# - 2.3.7/etcd2 -> 3.0.13/etcd2
-# - 3.0.13/etcd2 -> 3.0.13/etcd3
+# - 2.3.7/etcd2 -> 3.0.14/etcd2
+# - 3.0.14/etcd2 -> 3.0.14/etcd3
 #
 # NOTE: The releases supported in this script has to match release binaries
 # present in the etcd image (to make this script work correctly).
@@ -57,10 +57,16 @@ if [ "${TARGET_STORAGE}" != "etcd2" -a "${TARGET_STORAGE}" != "etcd3" ]; then
   exit 1
 fi
 
+# Correctly support upgrade and rollback to non-default version.
+if [ "${DO_NOT_MOVE_BINARIES:-}" != "true" ]; then
+  cp "/usr/local/bin/etcd-${TARGET_VERSION}" "/usr/local/bin/etcd"
+  cp "/usr/local/bin/etcdctl-${TARGET_VERSION}" "/usr/local/bin/etcdctl"
+fi
+
 # NOTE: SUPPORTED_VERSION has to match release binaries present in the
 # etcd image (to make this script work correctly).
 # We cannot use array since sh doesn't support it.
-SUPPORTED_VERSIONS_STRING="2.2.1 2.3.7 3.0.13"
+SUPPORTED_VERSIONS_STRING="2.2.1 2.3.7 3.0.14"
 SUPPORTED_VERSIONS=$(echo "${SUPPORTED_VERSIONS_STRING}" | tr " " "\n")
 
 VERSION_FILE="version.txt"
@@ -96,6 +102,13 @@ start_etcd() {
   # Use random ports, so that apiserver cannot connect to etcd.
   ETCD_PORT=18629
   ETCD_PEER_PORT=18630
+  # Avoid collisions between etcd and event-etcd.
+  case "${DATA_DIRECTORY}" in
+    *event*)
+      ETCD_PORT=18631
+      ETCD_PEER_PORT=18632
+      ;;
+  esac
   local ETCD_CMD="${ETCD:-/usr/local/bin/etcd-${START_VERSION}}"
   local ETCDCTL_CMD="${ETCDCTL:-/usr/local/bin/etcdctl-${START_VERSION}}"
   local API_VERSION="$(echo ${START_STORAGE} | cut -c5-5)"
@@ -108,17 +121,16 @@ start_etcd() {
     --listen-client-urls http://127.0.0.1:${ETCD_PORT} \
     --advertise-client-urls http://127.0.0.1:${ETCD_PORT} \
     --listen-peer-urls http://127.0.0.1:${ETCD_PEER_PORT} \
-    --initial-advertise-peer-urls http://127.0.0.1:${ETCD_PEER_PORT} \
-    1>>/dev/null 2>&1 &
+    --initial-advertise-peer-urls http://127.0.0.1:${ETCD_PEER_PORT} &
   ETCD_PID=$!
   # Wait until we can write to etcd.
   for i in $(seq 240); do
+    sleep 0.5
     ETCDCTL_API="${API_VERSION}" ${ETCDCTL_CMD} 'etcd_version' ${START_VERSION}
     if [ "$?" -eq "0" ]; then
       echo "Etcd on port ${ETCD_PORT} is up."
       return 0
     fi
-    sleep 0.5
   done
   echo "Timeout while waiting for etcd on port ${ETCD_PORT}"
   return 1
@@ -132,6 +144,18 @@ stop_etcd() {
 
 ATTACHLEASE="${ATTACHLEASE:-/usr/local/bin/attachlease}"
 ROLLBACK="${ROLLBACK:-/usr/local/bin/rollback}"
+
+# If we are upgrading from 2.2.1 and this is the first try for upgrade,
+# do the backup to allow restoring from it in case of failed upgrade.
+BACKUP_DIR="${DATA_DIRECTORY}/migration-backup"
+if [ "${CURRENT_VERSION}" = "2.2.1" -a ! -d "${BACKUP_DIR}" ]; then
+  echo "Backup etcd before starting migration"
+  mkdir ${BACKUP_DIR}
+  ETCDCTL_CMD="/usr/local/bin/etcdctl-2.2.1"
+  ETCDCTL_API=2 ${ETCDCTL_CMD} backup --data-dir=${DATA_DIRECTORY} \
+    --backup-dir=${BACKUP_DIR}
+  echo "Backup done in ${BACKUP_DIR}"
+fi
 
 # Do the roll-forward migration if needed.
 # The migration goes as following:
@@ -156,9 +180,9 @@ for step in ${SUPPORTED_VERSIONS}; do
     fi
     # Kill etcd and wait until this is down.
     stop_etcd
+    CURRENT_VERSION=${step}
+    echo "${CURRENT_VERSION}/${CURRENT_STORAGE}" > "${DATA_DIRECTORY}/${VERSION_FILE}"
   fi
-  CURRENT_VERSION=${step}
-  echo "${CURRENT_VERSION}/${CURRENT_STORAGE}" > "${DATA_DIRECTORY}/${VERSION_FILE}"
   if [ "$(echo ${CURRENT_VERSION} | cut -c1-2)" = "3." -a "${CURRENT_STORAGE}" = "etcd2" -a "${TARGET_STORAGE}" = "etcd3" ]; then
     # If it is the first 3.x release in the list and we are migrating
     # also from 'etcd2' to 'etcd3', do the migration now.

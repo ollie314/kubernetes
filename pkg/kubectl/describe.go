@@ -116,7 +116,7 @@ func describerMap(c clientset.Interface) map[unversioned.GroupKind]Describer {
 		extensions.Kind("Job"):                         &JobDescriber{c},
 		extensions.Kind("Ingress"):                     &IngressDescriber{c},
 		batch.Kind("Job"):                              &JobDescriber{c},
-		batch.Kind("ScheduledJob"):                     &ScheduledJobDescriber{c},
+		batch.Kind("CronJob"):                          &CronJobDescriber{c},
 		apps.Kind("StatefulSet"):                       &StatefulSetDescriber{c},
 		certificates.Kind("CertificateSigningRequest"): &CertificateSigningRequestDescriber{c},
 		storage.Kind("StorageClass"):                   &StorageClassDescriber{c},
@@ -572,6 +572,8 @@ func describeVolumes(volumes []api.Volume, out io.Writer, space string) {
 			printVsphereVolumeSource(volume.VolumeSource.VsphereVolume, out)
 		case volume.VolumeSource.Cinder != nil:
 			printCinderVolumeSource(volume.VolumeSource.Cinder, out)
+		case volume.VolumeSource.PhotonPersistentDisk != nil:
+			printPhotonPersistentDiskVolumeSource(volume.VolumeSource.PhotonPersistentDisk, out)
 		default:
 			fmt.Fprintf(out, "  <unknown>\n")
 		}
@@ -706,6 +708,14 @@ func printVsphereVolumeSource(vsphere *api.VsphereVirtualDiskVolumeSource, out i
 		"    FSType:\t%v\n",
 		vsphere.VolumePath, vsphere.FSType)
 }
+
+func printPhotonPersistentDiskVolumeSource(photon *api.PhotonPersistentDiskVolumeSource, out io.Writer) {
+	fmt.Fprintf(out, "    Type:\tPhotonPersistentDisk (a Persistent Disk resource in photon platform)\n"+
+		"    PdID:\t%v\n"+
+		"    FSType:\t%v\n",
+		photon.PdID, photon.FSType)
+}
+
 func printCinderVolumeSource(cinder *api.CinderVolumeSource, out io.Writer) {
 	fmt.Fprintf(out, "    Type:\tCinder (a Persistent Disk resource in OpenStack)\n"+
 		"    VolumeID:\t%v\n"+
@@ -770,6 +780,10 @@ func (d *PersistentVolumeDescriber) Describe(namespace, name string, describerSe
 			printVsphereVolumeSource(pv.Spec.VsphereVolume, out)
 		case pv.Spec.Cinder != nil:
 			printCinderVolumeSource(pv.Spec.Cinder, out)
+		case pv.Spec.AzureDisk != nil:
+			printAzureDiskVolumeSource(pv.Spec.AzureDisk, out)
+		case pv.Spec.PhotonPersistentDisk != nil:
+			printPhotonPersistentDiskVolumeSource(pv.Spec.PhotonPersistentDisk, out)
 		}
 
 		if events != nil {
@@ -1220,13 +1234,13 @@ func describeJob(job *batch.Job, events *api.EventList) (string, error) {
 	})
 }
 
-// ScheduledJobDescriber generates information about a scheduled job and the jobs it has created.
-type ScheduledJobDescriber struct {
+// CronJobDescriber generates information about a scheduled job and the jobs it has created.
+type CronJobDescriber struct {
 	clientset.Interface
 }
 
-func (d *ScheduledJobDescriber) Describe(namespace, name string, describerSettings DescriberSettings) (string, error) {
-	scheduledJob, err := d.Batch().ScheduledJobs(namespace).Get(name)
+func (d *CronJobDescriber) Describe(namespace, name string, describerSettings DescriberSettings) (string, error) {
+	scheduledJob, err := d.Batch().CronJobs(namespace).Get(name)
 	if err != nil {
 		return "", err
 	}
@@ -1236,10 +1250,10 @@ func (d *ScheduledJobDescriber) Describe(namespace, name string, describerSettin
 		events, _ = d.Core().Events(namespace).Search(scheduledJob)
 	}
 
-	return describeScheduledJob(scheduledJob, events)
+	return describeCronJob(scheduledJob, events)
 }
 
-func describeScheduledJob(scheduledJob *batch.ScheduledJob, events *api.EventList) (string, error) {
+func describeCronJob(scheduledJob *batch.CronJob, events *api.EventList) (string, error) {
 	return tabbedString(func(out io.Writer) error {
 		fmt.Fprintf(out, "Name:\t%s\n", scheduledJob.Name)
 		fmt.Fprintf(out, "Namespace:\t%s\n", scheduledJob.Namespace)
@@ -2158,6 +2172,13 @@ func (dd *DeploymentDescriber) Describe(namespace, name string, describerSetting
 		if d.Spec.Strategy.RollingUpdate != nil {
 			ru := d.Spec.Strategy.RollingUpdate
 			fmt.Fprintf(out, "RollingUpdateStrategy:\t%s max unavailable, %s max surge\n", ru.MaxUnavailable.String(), ru.MaxSurge.String())
+		}
+		if len(d.Status.Conditions) > 0 {
+			fmt.Fprint(out, "Conditions:\n  Type\tStatus\tReason\n")
+			fmt.Fprint(out, "  ----\t------\t------\n")
+			for _, c := range d.Status.Conditions {
+				fmt.Fprintf(out, "  %v \t%v\t%v\n", c.Type, c.Status, c.Reason)
+			}
 		}
 		oldRSs, _, newRS, err := deploymentutil.GetAllReplicaSets(d, dd)
 		if err == nil {

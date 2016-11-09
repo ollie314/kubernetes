@@ -91,6 +91,7 @@ type ServerRunOptions struct {
 	InsecureBindAddress          net.IP
 	InsecurePort                 int
 	KeystoneURL                  string
+	KeystoneCAFile               string
 	KubernetesServiceNodePort    int
 	LongRunningRequestRE         string
 	MasterCount                  int
@@ -118,6 +119,7 @@ type ServerRunOptions struct {
 	TLSCAFile              string
 	TLSCertFile            string
 	TLSPrivateKeyFile      string
+	SNICertKeys            []config.NamedCertKey
 	TokenAuthFile          string
 	EnableAnyToken         bool
 	WatchCacheSizes        []string
@@ -378,6 +380,10 @@ func (s *ServerRunOptions) AddUniversalFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.KeystoneURL, "experimental-keystone-url", s.KeystoneURL,
 		"If passed, activates the keystone authentication plugin.")
 
+	fs.StringVar(&s.KeystoneCAFile, "experimental-keystone-ca-file", s.KeystoneCAFile, ""+
+		"If set, the Keystone server's certificate will be verified by one of the authorities "+
+		"in the experimental-keystone-ca-file, otherwise the host's root CA set will be used.")
+
 	// See #14282 for details on how to test/try this option out.
 	// TODO: remove this comment once this option is tested in CI.
 	fs.IntVar(&s.KubernetesServiceNodePort, "kubernetes-service-node-port", s.KubernetesServiceNodePort, ""+
@@ -393,7 +399,7 @@ func (s *ServerRunOptions) AddUniversalFlags(fs *pflag.FlagSet) {
 		"The number of apiservers running in the cluster.")
 
 	fs.StringVar(&s.MasterServiceNamespace, "master-service-namespace", s.MasterServiceNamespace, ""+
-		"The namespace from which the kubernetes master services should be injected into pods.")
+		"DEPRECATED: the namespace from which the kubernetes master services should be injected into pods.")
 
 	fs.IntVar(&s.MaxRequestsInFlight, "max-requests-inflight", s.MaxRequestsInFlight, ""+
 		"The maximum number of requests in flight at a given time. When the server exceeds this, "+
@@ -488,13 +494,22 @@ func (s *ServerRunOptions) AddUniversalFlags(fs *pflag.FlagSet) {
 		"Controllers. This must be a valid PEM-encoded CA bundle.")
 
 	fs.StringVar(&s.TLSCertFile, "tls-cert-file", s.TLSCertFile, ""+
-		"File containing x509 Certificate for HTTPS. (CA cert, if any, concatenated "+
+		"File containing the default x509 Certificate for HTTPS. (CA cert, if any, concatenated "+
 		"after server cert). If HTTPS serving is enabled, and --tls-cert-file and "+
 		"--tls-private-key-file are not provided, a self-signed certificate and key "+
 		"are generated for the public address and saved to /var/run/kubernetes.")
 
 	fs.StringVar(&s.TLSPrivateKeyFile, "tls-private-key-file", s.TLSPrivateKeyFile,
-		"File containing x509 private key matching --tls-cert-file.")
+		"File containing the default x509 private key matching --tls-cert-file.")
+
+	fs.Var(config.NewNamedCertKeyArray(&s.SNICertKeys), "tls-sni-cert-key", ""+
+		"A pair of x509 certificate and private key file paths, optionally suffixed with a list of "+
+		"domain patterns which are fully qualified domain names, possibly with prefixed wildcard "+
+		"segments. If no domain patterns are provided, the names of the certificate are "+
+		"extracted. Non-wildcard matches trump over wildcard matches, explicit domain patterns "+
+		"trump over extracted names. For multiple key/certificate pairs, use the "+
+		"--tls-sni-cert-key multiple times. "+
+		"Examples: \"example.key,example.crt\" or \"*.foo.com,foo.com:foo.key,foo.crt\".")
 
 	fs.StringVar(&s.TokenAuthFile, "token-auth-file", s.TokenAuthFile, ""+
 		"If set, the file that will be used to secure the secure port of the API server "+

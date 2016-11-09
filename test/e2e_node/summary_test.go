@@ -74,7 +74,7 @@ var _ = framework.KubeDescribe("Summary API", func() {
 					// We don't limit system container memory.
 					"AvailableBytes":  BeNil(),
 					"UsageBytes":      bounded(1*mb, 10*gb),
-					"WorkingSetBytes": bounded(1*mb, 1*gb),
+					"WorkingSetBytes": bounded(1*mb, 10*gb),
 					"RSSBytes":        bounded(1*mb, 1*gb),
 					"PageFaults":      bounded(1000, 1E9),
 					"MajorPageFaults": bounded(0, 100000),
@@ -111,6 +111,7 @@ var _ = framework.KubeDescribe("Summary API", func() {
 							"UsedBytes":      bounded(kb, 10*mb),
 							"InodesFree":     bounded(1E4, 1E8),
 							"Inodes":         bounded(1E4, 1E8),
+							"InodesUsed":     bounded(0, 1E8),
 						}),
 						"Logs": ptrMatchAllFields(gstruct.Fields{
 							"AvailableBytes": fsCapacityBounds,
@@ -118,6 +119,7 @@ var _ = framework.KubeDescribe("Summary API", func() {
 							"UsedBytes":      bounded(kb, 10*mb),
 							"InodesFree":     bounded(1E4, 1E8),
 							"Inodes":         bounded(1E4, 1E8),
+							"InodesUsed":     bounded(0, 1E8),
 						}),
 						"UserDefinedMetrics": BeEmpty(),
 					}),
@@ -136,9 +138,9 @@ var _ = framework.KubeDescribe("Summary API", func() {
 							"AvailableBytes": fsCapacityBounds,
 							"CapacityBytes":  fsCapacityBounds,
 							"UsedBytes":      bounded(kb, 1*mb),
-							// Inodes are not reported for Volumes.
-							"InodesFree": BeNil(),
-							"Inodes":     BeNil(),
+							"InodesFree":     bounded(1E4, 1E8),
+							"Inodes":         bounded(1E4, 1E8),
+							"InodesUsed":     bounded(0, 1E8),
 						}),
 					}),
 				}),
@@ -179,6 +181,7 @@ var _ = framework.KubeDescribe("Summary API", func() {
 						"UsedBytes":      bounded(kb, 10*gb),
 						"InodesFree":     bounded(1E4, 1E8),
 						"Inodes":         bounded(1E4, 1E8),
+						"InodesUsed":     bounded(0, 1E8),
 					}),
 					"Runtime": ptrMatchAllFields(gstruct.Fields{
 						"ImageFs": ptrMatchAllFields(gstruct.Fields{
@@ -187,6 +190,7 @@ var _ = framework.KubeDescribe("Summary API", func() {
 							"UsedBytes":      bounded(kb, 10*gb),
 							"InodesFree":     bounded(1E4, 1E8),
 							"Inodes":         bounded(1E4, 1E8),
+							"InodesUsed":     bounded(0, 1E8),
 						}),
 					}),
 				}),

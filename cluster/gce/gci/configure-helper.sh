@@ -473,6 +473,7 @@ function start-kubelet {
   flags+=" --cluster-dns=${DNS_SERVER_IP}"
   flags+=" --cluster-domain=${DNS_DOMAIN}"
   flags+=" --config=/etc/kubernetes/manifests"
+  flags+=" --experimental-mounter-path=${KUBE_HOME}/bin/mounter"
 
   if [[ -n "${KUBELET_PORT:-}" ]]; then
     flags+=" --port=${KUBELET_PORT}"
@@ -483,11 +484,8 @@ function start-kubelet {
     if [[ ! -z "${KUBELET_APISERVER:-}" && ! -z "${KUBELET_CERT:-}" && ! -z "${KUBELET_KEY:-}" ]]; then
       flags+=" --api-servers=https://${KUBELET_APISERVER}"
       flags+=" --register-schedulable=false"
-      # need at least a /29 pod cidr for now due to #32844
-      # TODO: determine if we still allow non-hostnetwork pods to run on master, clean up master pod setup
-      # WARNING: potential ip range collision with 10.123.45.0/29
-      flags+=" --pod-cidr=10.123.45.0/29"
     else
+      # Standalone mode (not widely used?)
       flags+=" --pod-cidr=${MASTER_IP_RANGE}"
     fi
   else # For nodes
@@ -625,11 +623,21 @@ function prepare-etcd-manifest {
   sed -i -e "s@{{ *hostname *}}@$host_name@g" "${temp_file}"
   sed -i -e "s@{{ *etcd_cluster *}}@$etcd_cluster@g" "${temp_file}"
   sed -i -e "s@{{ *storage_backend *}}@${STORAGE_BACKEND:-}@g" "${temp_file}"
+  if [[ "${STORAGE_BACKEND:-}" == "etcd3" ]]; then
+    sed -i -e "s@{{ *quota_bytes *}}@--quota-backend-bytes=4294967296@g" "${temp_file}"
+  else
+    sed -i -e "s@{{ *quota_bytes *}}@@g" "${temp_file}"
+  fi
   sed -i -e "s@{{ *cluster_state *}}@$cluster_state@g" "${temp_file}"
-  if [[ -n "${ETCD_VERSION:-}" ]]; then
-    sed -i -e "s@{{ *pillar\.get('etcd_docker_tag', '\(.*\)') *}}@${ETCD_VERSION}@g" "${temp_file}"
+  if [[ -n "${ETCD_IMAGE:-}" ]]; then
+    sed -i -e "s@{{ *pillar\.get('etcd_docker_tag', '\(.*\)') *}}@${ETCD_IMAGE}@g" "${temp_file}"
   else
     sed -i -e "s@{{ *pillar\.get('etcd_docker_tag', '\(.*\)') *}}@\1@g" "${temp_file}"
+  fi
+  if [[ -n "${ETCD_VERSION:-}" ]]; then
+    sed -i -e "s@{{ *pillar\.get('etcd_version', '\(.*\)') *}}@${ETCD_VERSION}@g" "${temp_file}"
+  else
+    sed -i -e "s@{{ *pillar\.get('etcd_version', '\(.*\)') *}}@\1@g" "${temp_file}"
   fi
   # Replace the volume host path.
   sed -i -e "s@/mnt/master-pd/var/etcd@/mnt/disks/master-pd/var/etcd@g" "${temp_file}"
@@ -730,6 +738,10 @@ function start-kube-apiserver {
     params+=" --enable-garbage-collector=${ENABLE_GARBAGE_COLLECTOR}"
   fi
   if [[ -n "${NUM_NODES:-}" ]]; then
+    # If the cluster is large, increase max-requests-inflight limit in apiserver.
+    if [[ "${NUM_NODES}" -ge 1000 ]]; then
+      params+=" --max-requests-inflight=1500"
+    fi
     # Set amount of memory available for apiserver based on number of nodes.
     # TODO: Once we start setting proper requests and limits for apiserver
     # we should reuse the same logic here instead of current heuristic.
@@ -1023,6 +1035,10 @@ function start-kube-addons {
     sed -i -e "s@{{ *pillar\['dns_domain'\] *}}@${DNS_DOMAIN}@g" "${dns_rc_file}"
     sed -i -e "s@{{ *pillar\['dns_server'\] *}}@${DNS_SERVER_IP}@g" "${dns_svc_file}"
 
+    if [[ "${ENABLE_DNS_HORIZONTAL_AUTOSCALER:-}" == "true" ]]; then
+      setup-addon-manifests "addons" "dns-horizontal-autoscaler"
+    fi
+
     if [[ "${FEDERATION:-}" == "true" ]]; then
       local federations_domain_map="${FEDERATIONS_DOMAIN_MAP:-}"
       if [[ -z "${federations_domain_map}" && -n "${FEDERATION_NAME:-}" && -n "${DNS_ZONE_NAME:-}" ]]; then
@@ -1076,7 +1092,7 @@ function start-fluentd {
   echo "Start fluentd pod"
   if [[ "${ENABLE_NODE_LOGGING:-}" == "true" ]]; then
     if [[ "${LOGGING_DESTINATION:-}" == "gcp" ]]; then
-      cp "${KUBE_HOME}/kube-manifests/kubernetes/gci-trusty/gci/fluentd-gcp.yaml" /etc/kubernetes/manifests/
+      cp "${KUBE_HOME}/kube-manifests/kubernetes/fluentd-gcp-gci.yaml" /etc/kubernetes/manifests/
     elif [[ "${LOGGING_DESTINATION:-}" == "elasticsearch" && "${KUBERNETES_MASTER:-}" != "true" ]]; then
       # Running fluentd-es on the master is pointless, as it can't communicate
       # with elasticsearch from there in the default configuration.
@@ -1163,7 +1179,13 @@ EOF
 }
 
 function override-kubectl {
+    echo "overriding kubectl"
     echo "export PATH=${KUBE_HOME}/bin:\$PATH" > /etc/profile.d/kube_env.sh
+}
+
+function pre-warm-mounter {
+    echo "prewarming mounter"
+    ${KUBE_HOME}/bin/mounter &> /dev/null
 }
 
 ########### Main Function ###########
@@ -1200,6 +1222,8 @@ else
 fi
 
 override-kubectl
+# Run the containerized mounter once to pre-cache the container image.
+pre-warm-mounter
 assemble-docker-flags
 load-docker-images
 start-kubelet
