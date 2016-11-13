@@ -45,6 +45,7 @@ CronJob should replace jobs when ReplaceConcurrent,soltysh,1
 CronJob should schedule multiple jobs concurrently,soltysh,1
 DNS horizontal autoscaling kube-dns-autoscaler should scale kube-dns pods in both nonfaulty and faulty scenarios,MrHohn,0
 DNS horizontal autoscaling kube-dns-autoscaler should scale kube-dns pods when cluster size changed,MrHohn,0
+ContainerLogPath Pod with a container printed log to stdout should print log to correct log path,resouer,0
 DNS should provide DNS for ExternalName services,rmmh,1
 DNS should provide DNS for pods for Hostname and Subdomain Annotation,mtaufen,1
 DNS should provide DNS for services,roberthbailey,1
@@ -147,6 +148,7 @@ Federation apiserver Cluster objects should be created and deleted successfully,
 Federation daemonsets DaemonSet objects should be created and deleted successfully,soltysh,1
 Federation deployments Deployment objects should be created and deleted successfully,soltysh,1
 Federation deployments Federated Deployment should create and update matching deployments in underling clusters,soltysh,1
+Federation daemonsets DaemonSet objects should be created and deleted successfully,nikhiljindal,0
 Federation events Event objects should be created and deleted successfully,karlkfi,1
 Federation namespace Namespace objects all resources in the namespace should be deleted when namespace is deleted,nikhiljindal,0
 Federation namespace Namespace objects should be created and deleted successfully,xiang90,1
